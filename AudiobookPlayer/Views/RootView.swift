@@ -2,42 +2,60 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var engine: AudioEngine
+    @EnvironmentObject private var store: LibraryStore
+    @EnvironmentObject private var sleepTimer: SleepTimer
     @Environment(\.scenePhase) private var scenePhase
 
+    @State private var tab: Tab = .library
     @State private var showPlayer = false
 
+    enum Tab: Hashable {
+        case library
+        case settings
+    }
+
     var body: some View {
-        NavigationStack {
-            LibraryView(onOpenPlayer: { showPlayer = true })
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if engine.currentBook != nil {
-                        MiniPlayerBar(onOpen: { showPlayer = true })
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 8)
-                            .background(.bar)
-                    }
-                }
+        TabView(selection: $tab) {
+            NavigationStack {
+                LibraryView(onOpenPlayer: { showPlayer = true })
+            }
+            .tabItem {
+                Label("书库", systemImage: "books.vertical")
+            }
+            .tag(Tab.library)
+
+            NavigationStack {
+                SettingsView()
+            }
+            .tabItem {
+                Label("设置", systemImage: "gearshape")
+            }
+            .tag(Tab.settings)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if engine.currentBook != nil {
+                MiniPlayerBar(onOpen: { showPlayer = true })
+            }
         }
         .sheet(isPresented: $showPlayer) {
             PlayerView()
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-        }
-        .task {
-            await bootstrap()
+                .environmentObject(engine)
+                .environmentObject(store)
+                .environmentObject(sleepTimer)
         }
         .onChange(of: scenePhase) { phase in
-            // 切后台/锁屏前落盘，避免掉电丢进度
-            if phase != .active {
-                AudioEngine.shared.persistProgress()
+            switch phase {
+            case .background, .inactive:
+                engine.persistProgress()
+            default:
+                break
             }
         }
-    }
-
-    private func bootstrap() async {
-        AudioEngine.shared.restoreLastSession()
-        await LibraryStore.shared.refreshMissingDurations()
-        AudioEngine.shared.refreshCurrentBookFromStore()
+        .task {
+            AudioEngine.shared.restoreLastSession()
+            await LibraryStore.shared.refreshMissingDurations()
+            AudioEngine.shared.refreshCurrentBookFromStore()
+        }
     }
 }
 
@@ -50,55 +68,75 @@ struct MiniPlayerBar: View {
     var onOpen: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            Button(action: onOpen) {
-                HStack(spacing: 10) {
-                    BookCoverView(book: engine.currentBook, size: 32)
+        VStack(spacing: 0) {
+            Divider()
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(engine.currentBook?.title ?? "")
-                            .font(.subheadline)
-                            .lineLimit(1)
-                        Text(subtitle)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
+            HStack(spacing: 12) {
+                BookCoverView(book: engine.currentBook, size: 40)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(engine.currentBook?.title ?? "未在播放")
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
 
-            Button {
-                engine.toggle()
-            } label: {
-                Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 20))
-                    .frame(width: 40, height: 40)
-            }
-            .buttonStyle(.plain)
+                Spacer(minLength: 0)
 
-            Button {
-                engine.playNext()
-            } label: {
-                Image(systemName: "forward.end.fill")
-                    .font(.system(size: 16))
-                    .frame(width: 36, height: 40)
+                Button {
+                    engine.skip(by: -15)
+                } label: {
+                    Image(systemName: "gobackward.15")
+                        .font(.system(size: 19))
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    engine.toggle()
+                } label: {
+                    Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 22))
+                        .frame(width: 34)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    engine.skip(by: 30)
+                } label: {
+                    Image(systemName: "goforward.30")
+                        .font(.system(size: 19))
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.bar)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onOpen)
+
+            if sleepTimer.remaining != nil {
+                Text(sleepTimer.description)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 4)
+                    .background(.bar)
+            }
         }
-        .frame(height: 56)
     }
 
     private var subtitle: String {
-        if sleepTimer.isActive {
-            return sleepTimer.description
-        }
-        let time = "\(Audiobook.timeString(engine.currentTime)) / \(Audiobook.timeString(engine.duration))"
+        let time = Audiobook.timeString(engine.currentTime)
+        let total = Audiobook.timeString(engine.duration)
+        let queue = engine.queueName.map { "· \($0)" } ?? ""
         if engine.isPlaying {
-            return time
+            return "\(time) / \(total)\(queue)"
         }
-        return engine.currentTime > 1 ? "已暂停 · \(time)" : time
+        return "已暂停 · \(time)\(queue)"
     }
 }

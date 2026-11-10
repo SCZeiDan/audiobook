@@ -18,15 +18,19 @@ enum ImportError: LocalizedError {
     }
 }
 
-/// 一次导入的结果，用于给用户回显「进了几个、跳过几个」
+/// 一次导入的结果，用于给用户回显「进了几个、跳过几个、建了哪些歌单」
 struct ImportOutcome {
     var added: [Audiobook] = []
     var skipped: [String] = []
+    var playlistNames: [String] = []
 
     var summary: String {
         if added.isEmpty && skipped.isEmpty { return "没有找到可导入的音频文件。" }
         var parts: [String] = []
         if !added.isEmpty { parts.append("已导入 \(added.count) 个文件") }
+        if !playlistNames.isEmpty {
+            parts.append("新建歌单「\(playlistNames.joined(separator: "」「"))」")
+        }
         if !skipped.isEmpty { parts.append("跳过 \(skipped.count) 个重复文件") }
         return parts.joined(separator: "，") + "。"
     }
@@ -54,11 +58,21 @@ enum ImportService {
                 throw ImportError.unsupported(url.lastPathComponent)
             }
 
+            var produced: [UUID] = []
             for file in files {
                 if let book = try await importOne(file, store: store) {
                     outcome.added.append(book)
+                    produced.append(book.id)
                 } else {
                     outcome.skipped.append(file.lastPathComponent)
+                }
+            }
+
+            // 文件夹 = 一个歌单，名字取文件夹名
+            if url.hasDirectoryPath, !produced.isEmpty {
+                let name = url.lastPathComponent
+                if store.createPlaylist(name: name, bookIDs: produced) != nil {
+                    outcome.playlistNames.append(name)
                 }
             }
         }

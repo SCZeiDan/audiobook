@@ -144,3 +144,54 @@ struct BookTuningSheet: View {
         dismiss()
     }
 }
+
+// MARK: - 歌单重命名
+
+struct PlaylistNameSheet: View {
+    let title: String
+    let initial: String
+    var onSave: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String
+
+    init(title: String, initial: String, onSave: @escaping (String) -> Void) {
+        self.title = title
+        self.initial = initial
+        self.onSave = onSave
+        _text = State(initialValue: initial)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("歌单名称", text: $text)
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.done)
+                    .onSubmit(save)
+            }
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存", action: save)
+                        .disabled(trimmed.isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.height(220)])
+    }
+
+    private var trimmed: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func save() {
+        guard !trimmed.isEmpty else { return }
+        onSave(trimmed)
+        dismiss()
+    }
+}

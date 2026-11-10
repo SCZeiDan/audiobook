@@ -1,7 +1,7 @@
 import Foundation
 import Combine
 
-/// 书库：持有全部 Audiobook，负责落盘、增删、排序、进度更新。
+/// 书库与歌单的唯一数据源：负责落盘、增删、排序、进度更新、磁盘自修复。
 @MainActor
 final class LibraryStore: ObservableObject {
     static let shared = LibraryStore()
@@ -35,6 +35,7 @@ final class LibraryStore: ObservableObject {
     }
 
     @Published private(set) var books: [Audiobook] = []
+    @Published private(set) var playlists: [Playlist] = []
     @Published var sortOrder: SortOrder = .added
 
     private let fm = FileManager.default
@@ -71,6 +72,13 @@ final class LibraryStore: ObservableObject {
         return base.appendingPathComponent("library.json")
     }
 
+    /// 索引文件结构。0.2 及以前存的是裸数组，这里做兼容读取
+    private struct LibraryFile: Codable {
+        var version: Int = 2
+        var books: [Audiobook] = []
+        var playlists: [Playlist] = []
+    }
+
     private init() {
         load()
         reconcile()
@@ -92,18 +100,26 @@ final class LibraryStore: ObservableObject {
         guard let data = try? Data(contentsOf: indexURL) else { return }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        books = (try? decoder.decode([Audiobook].self, from: data)) ?? []
+        if let file = try? decoder.decode(LibraryFile.self, from: data) {
+            books = file.books
+            playlists = file.playlists
+        } else if let legacy = try? decoder.decode([Audiobook].self, from: data) {
+            // 0.2 及以前：只有书，没有歌单
+            books = legacy
+            playlists = []
+        }
     }
 
     func save() {
+        let file = LibraryFile(version: 2, books: books, playlists: playlists)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(books) else { return }
+        guard let data = try? encoder.encode(file) else { return }
         try? data.write(to: indexURL, options: .atomic)
     }
 
-    // MARK: - 增删改
+    // MARK: - 书籍增删改
 
     func add(_ newBooks: [Audiobook]) {
         guard !newBooks.isEmpty else { return }
@@ -117,17 +133,20 @@ final class LibraryStore: ObservableObject {
         save()
     }
 
+    private func deleteFile(of book: Audiobook) {
+        try? fm.removeItem(at: fileURL(for: book))
+        if let cover = book.coverFileName {
+            try? fm.removeItem(at: coverURL(for: cover))
+        }
+    }
+
     func remove(at offsets: IndexSet) {
         let doomed = offsets.compactMap { books.indices.contains($0) ? books[$0] : nil }
-        for book in doomed {
-            try? fm.removeItem(at: fileURL(for: book))
-            if let cover = book.coverFileName {
-                try? fm.removeItem(at: coverURL(for: cover))
-            }
-        }
-        for index in offsets.sorted(by: >) where books.indices.contains(index) {
-            books.remove(at: index)
-        }
+        guard !doomed.isEmpty else { return }
+        doomed.forEach(deleteFile(of:))
+        let ids = Set(doomed.map { $0.id })
+        books.removeAll { ids.contains($0.id) }
+        purgePlaylists(ids)
         save()
     }
 
@@ -142,13 +161,85 @@ final class LibraryStore: ObservableObject {
         update(copy)
     }
 
-    /// 批量设置片头片尾，适合整季分集统一处理
-    func applySkipSettings(intro: Double, outro: Double) {
+    /// 批量设置片头片尾；ids 为空表示整个书库
+    func applySkipSettings(intro: Double, outro: Double, to ids: Set<UUID>? = nil) {
         for i in books.indices {
+            if let ids = ids, !ids.contains(books[i].id) { continue }
             books[i].skipIntro = intro
             books[i].skipOutro = outro
         }
         save()
+    }
+
+    // MARK: - 歌单
+
+    func books(in playlist: Playlist) -> [Audiobook] {
+        let map = Dictionary(uniqueKeysWithValues: books.map { ($0.id, $0) })
+        return playlist.bookIDs.compactMap { map[$0] }
+    }
+
+    func playlist(id: UUID?) -> Playlist? {
+        guard let id = id else { return nil }
+        return playlists.first { $0.id == id }
+    }
+
+    /// 同名歌单则把书并进去，避免反复导入文件夹生成一堆同名歌单
+    @discardableResult
+    func createPlaylist(name: String, bookIDs: [UUID]) -> Playlist? {
+        guard !bookIDs.isEmpty else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = trimmed.isEmpty ? "未命名歌单" : trimmed
+
+        if let i = playlists.firstIndex(where: { $0.name == finalName }) {
+            for id in bookIDs where !playlists[i].bookIDs.contains(id) {
+                playlists[i].bookIDs.append(id)
+            }
+            save()
+            return playlists[i]
+        }
+
+        let list = Playlist(name: finalName, bookIDs: bookIDs)
+        playlists.append(list)
+        save()
+        return list
+    }
+
+    func renamePlaylist(_ id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let i = playlists.firstIndex(where: { $0.id == id }) else { return }
+        playlists[i].name = trimmed
+        save()
+    }
+
+    /// 删除歌单。deleteFiles = true 时连歌单里的音频一起删，否则只解散歌单
+    func removePlaylist(id: UUID, deleteFiles: Bool) {
+        guard let index = playlists.firstIndex(where: { $0.id == id }) else { return }
+        let ids = Set(playlists[index].bookIDs)
+
+        if deleteFiles && !ids.isEmpty {
+            books.filter { ids.contains($0.id) }.forEach(deleteFile(of:))
+            books.removeAll { ids.contains($0.id) }
+            for i in playlists.indices {
+                playlists[i].bookIDs.removeAll { ids.contains($0) }
+            }
+        }
+
+        playlists.removeAll { $0.id == id }
+        save()
+    }
+
+    /// 从歌单里移除单本书（不动文件）
+    func removeBook(_ bookID: UUID, from playlistID: UUID) {
+        guard let i = playlists.firstIndex(where: { $0.id == playlistID }) else { return }
+        playlists[i].bookIDs.removeAll { $0 == bookID }
+        save()
+    }
+
+    /// 书被删掉后，把残留的 ID 从所有歌单里清掉
+    private func purgePlaylists(_ ids: Set<UUID>) {
+        for i in playlists.indices {
+            playlists[i].bookIDs.removeAll { ids.contains($0) }
+        }
     }
 
     // MARK: - 列表
@@ -176,6 +267,31 @@ final class LibraryStore: ObservableObject {
         books.reduce(0) { $0 + $1.duration }
     }
 
+    /// 已占用空间（音频 + 封面），用于设置页显示
+    var storageBytes: Int64 {
+        var total: Int64 = 0
+        for dir in [audioDirectory, coverDirectory] {
+            let names = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
+            for name in names {
+                let path = dir.appendingPathComponent(name).path
+                let attrs = try? fm.attributesOfItem(atPath: path)
+                total += (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+            }
+        }
+        return total
+    }
+
+    /// 清空整个书库：删索引、删音频、删封面
+    func clearAll() {
+        for book in books {
+            deleteFile(of: book)
+        }
+        books = []
+        playlists = []
+        try? fm.removeItem(at: indexURL)
+        save()
+    }
+
     // MARK: - 自修复
 
     /// 启动时对齐磁盘与索引：丢掉已消失的文件，收养手工丢进 Audio/ 的文件
@@ -201,7 +317,10 @@ final class LibraryStore: ObservableObject {
         }
 
         if kept.count != books.count {
+            let alive = Set(kept.map { $0.id })
+            let removed = Set(books.map { $0.id }).subtracting(alive)
             books = kept
+            purgePlaylists(removed)
             save()
         }
     }

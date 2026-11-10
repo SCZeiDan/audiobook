@@ -86,6 +86,13 @@ final class AudioEngine: NSObject, ObservableObject {
     // MARK: - 播放控制
 
     func play(_ book: Audiobook, from position: Double? = nil) {
+        // 手动点单本 = 离开歌单连播
+        clearQueue()
+        playTrack(book, from: position)
+    }
+
+    /// 不清空连播队列的底层播放，供歌单连播使用
+    private func playTrack(_ book: Audiobook, from position: Double? = nil) {
         cancelPendingPause()
         lastError = nil
 
@@ -241,19 +248,53 @@ final class AudioEngine: NSObject, ObservableObject {
 
     // MARK: - 队列
 
+    /// 当前连播队列（来自歌单）；为空时按书库顺序播放
+    @Published private(set) var queue: [UUID] = []
+    /// 正在连播的歌单名，用于界面提示
+    @Published private(set) var queueName: String?
+
+    func clearQueue() {
+        if !queue.isEmpty { queue = [] }
+        if queueName != nil { queueName = nil }
+    }
+
+    /// 从歌单开始连播：优先从还没听完的那本开始
+    func playPlaylist(_ playlist: Playlist) {
+        let list = LibraryStore.shared.books(in: playlist)
+        guard !list.isEmpty else {
+            lastError = "「\(playlist.name)」里还没有音频。"
+            return
+        }
+        let start = list.first(where: { !$0.isFinished }) ?? list[0]
+        queue = list.map { $0.id }
+        queueName = playlist.name
+        playTrack(start)
+    }
+
+    /// 连播顺序：有队列走队列，否则走书库
+    private var orderedBooks: [Audiobook] {
+        if !queue.isEmpty {
+            let all = LibraryStore.shared.books
+            let map = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+            let list = queue.compactMap { map[$0] }
+            if !list.isEmpty { return list }
+        }
+        return LibraryStore.shared.books
+    }
+
     func playNext() {
-        let books = LibraryStore.shared.books
+        let books = orderedBooks
         guard let current = currentBook,
               let index = books.firstIndex(where: { $0.id == current.id }) else { return }
         guard index + 1 < books.count else {
             pause()
             return
         }
-        play(books[index + 1])
+        playTrack(books[index + 1])
     }
 
     func playPrevious() {
-        let books = LibraryStore.shared.books
+        let books = orderedBooks
         guard let current = currentBook,
               let index = books.firstIndex(where: { $0.id == current.id }) else { return }
         // 播过 3 秒以上，先回本集开头，符合常见播放器习惯
@@ -262,7 +303,7 @@ final class AudioEngine: NSObject, ObservableObject {
             return
         }
         guard index > 0 else { return }
-        play(books[index - 1])
+        playTrack(books[index - 1])
     }
 
     // MARK: - 冷启动恢复

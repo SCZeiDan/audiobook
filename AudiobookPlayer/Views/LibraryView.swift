@@ -15,6 +15,11 @@ struct LibraryView: View {
     @State private var keyword = ""
     @State private var isDropTargeted = false
 
+    /// 正在重命名的歌单
+    @State private var renameTarget: Playlist?
+    /// 正在确认删除的歌单
+    @State private var deleteTarget: Playlist?
+
     private var visibleBooks: [Audiobook] {
         store.visibleBooks(keyword: keyword)
     }
@@ -22,22 +27,16 @@ struct LibraryView: View {
     var body: some View {
         List {
             importSection
+            if !store.playlists.isEmpty { playlistSection }
             librarySection
             summarySection
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("有声书")
+        .navigationTitle("雅拉马喜")
         .searchable(text: $keyword, prompt: "搜索书名")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 sortMenu
-            }
-            ToolbarItem(placement: .navigationBarTrailing) {
-                NavigationLink {
-                    AboutView()
-                } label: {
-                    Image(systemName: "info.circle")
-                }
             }
         }
         .fileImporter(
@@ -77,6 +76,25 @@ struct LibraryView: View {
             alertMessage = value
             showAlert = true
             engine.lastError = nil
+        }
+        .sheet(item: $renameTarget) { list in
+            PlaylistNameSheet(title: "重命名歌单", initial: list.name) { name in
+                store.renamePlaylist(list.id, to: name)
+            }
+        }
+        .confirmationDialog(
+            deleteTitle,
+            isPresented: Binding(
+                get: { deleteTarget != nil },
+                set: { if !$0 { deleteTarget = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("只删歌单，保留音频") { deletePlaylist(deleteFiles: false) }
+            Button("歌单和音频一起删", role: .destructive) { deletePlaylist(deleteFiles: true) }
+            Button("取消", role: .cancel) { deleteTarget = nil }
+        } message: {
+            Text("「一起删」会把歌单里的音频文件从手机里彻底移除，不可恢复。")
         }
         .overlay(alignment: .center) {
             if isDropTargeted {
@@ -118,20 +136,66 @@ struct LibraryView: View {
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "folder.badge.plus")
-                    Text("导入整个文件夹")
+                    Text("导入文件夹（自动成歌单）")
                     Spacer()
                 }
             }
             .disabled(isImporting)
         } footer: {
-            Text("支持 mp3 / m4a / m4b / flac / wav 等。文件会拷进 App 内，原文件删掉也不影响；也可以从「文件」App 直接拖进来，或用 iTunes 文件共享拷到 有声书/Documents。")
+            Text("支持 mp3 / m4a / m4b / flac / wav 等。选文件夹导入时，文件夹名会变成歌单名，里面的音频按文件名顺序排队；文件会拷进 App 内，原文件删掉也不影响。")
+        }
+    }
+
+    private var playlistSection: some View {
+        Section {
+            ForEach(store.playlists) { list in
+                PlaylistRow(
+                    playlist: list,
+                    books: store.books(in: list),
+                    isCurrent: engine.queueName == list.name && engine.currentBook != nil
+                )
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    engine.playPlaylist(list)
+                    onOpenPlayer()
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button(role: .destructive) {
+                        deleteTarget = list
+                    } label: {
+                        Label("删除", systemImage: "trash")
+                    }
+                }
+                .contextMenu {
+                    Button {
+                        engine.playPlaylist(list)
+                        onOpenPlayer()
+                    } label: {
+                        Label("播放整个歌单", systemImage: "play.fill")
+                    }
+                    Button {
+                        renameTarget = list
+                    } label: {
+                        Label("重命名", systemImage: "pencil")
+                    }
+                    Button(role: .destructive) {
+                        deleteTarget = list
+                    } label: {
+                        Label("删除歌单", systemImage: "trash")
+                    }
+                }
+            }
+        } header: {
+            Text("歌单")
+        } footer: {
+            Text("点歌单从第一集没听完的开始连播；左滑删除，可以只解散歌单，也可以连音频一起删。")
         }
     }
 
     private var librarySection: some View {
-        Section("书库") {
+        Section("全部音频") {
             if store.books.isEmpty {
-                Text("还没有书，先点上面导入。")
+                Text("还没有音频，先点上面导入。")
                     .foregroundStyle(.secondary)
             } else if visibleBooks.isEmpty {
                 Text("没有匹配「\(keyword)」的书。")
@@ -160,7 +224,7 @@ struct LibraryView: View {
             if store.books.isEmpty {
                 EmptyView()
             } else {
-                Text("共 \(store.books.count) 本 · 总时长 \(Audiobook.timeString(store.totalDuration))")
+                Text("共 \(store.books.count) 本 · \(store.playlists.count) 个歌单 · 总时长 \(Audiobook.timeString(store.totalDuration))")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -179,6 +243,11 @@ struct LibraryView: View {
         }
     }
 
+    private var deleteTitle: String {
+        guard let list = deleteTarget else { return "删除歌单" }
+        return "删除歌单「\(list.name)」？"
+    }
+
     // MARK: - 动作
 
     private func delete(_ book: Audiobook) {
@@ -186,6 +255,16 @@ struct LibraryView: View {
             engine.stop()
         }
         store.remove(id: book.id)
+    }
+
+    private func deletePlaylist(deleteFiles: Bool) {
+        guard let list = deleteTarget else { return }
+        if let current = engine.currentBook,
+           store.books(in: list).contains(where: { $0.id == current.id }) {
+            engine.stop()
+        }
+        store.removePlaylist(id: list.id, deleteFiles: deleteFiles)
+        deleteTarget = nil
     }
 
     private func show(_ message: String) {
@@ -212,7 +291,47 @@ struct LibraryView: View {
     }
 }
 
-// MARK: - 行
+// MARK: - 歌单行
+
+struct PlaylistRow: View {
+    let playlist: Playlist
+    let books: [Audiobook]
+    let isCurrent: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.16))
+                Image(systemName: isCurrent ? "speaker.wave.2.fill" : "music.note.list")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(width: 46, height: 46)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(playlist.name)
+                    .lineLimit(1)
+                Text("\(books.count) 集 · \(Audiobook.timeString(totalDuration))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "play.circle.fill")
+                .font(.system(size: 26))
+                .foregroundStyle(Color.accentColor)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var totalDuration: Double {
+        books.reduce(0) { $0 + $1.duration }
+    }
+}
+
+// MARK: - 单本行
 
 struct BookRow: View {
     let book: Audiobook
@@ -298,33 +417,5 @@ struct BookCoverView: View {
     private var loadedImage: UIImage? {
         guard let name = book?.coverFileName else { return nil }
         return CoverService.image(named: name, directory: LibraryStore.shared.coverDirectory)
-    }
-}
-
-// MARK: - 关于
-
-struct AboutView: View {
-    var body: some View {
-        List {
-            Section("版本") {
-                LabeledContent("版本", value: "0.2.0 (Beta)")
-                LabeledContent("最低系统", value: "iOS 16.0")
-            }
-            Section("已实现") {
-                Text("· 本地音频导入（文件 / 文件夹 / 拖拽），沙盒拷贝长期有效")
-                Text("· 后台播放 + 锁屏 / 耳机线控 / 车机控制")
-                Text("· 断点续播，每 5 秒落盘，冷启动自动回到上次那本")
-                Text("· 自定义跳过片头 / 片尾，可一键应用到全部")
-                Text("· 定时播放（倒计时 3 秒淡出 / 本章结束后停）")
-                Text("· 快捷指令与 Siri（播放、暂停、快进、定时）")
-                Text("· 自动提取音频内嵌封面")
-                Text("· 搜索、排序、来电打断后续播")
-            }
-            Section("说明") {
-                Text("所有音频只保存在本机，不上传、不联网。")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .navigationTitle("关于")
     }
 }
