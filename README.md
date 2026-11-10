@@ -1,6 +1,6 @@
-# 有声书 · iOS（Beta 0.2.0）
+# 雅拉马喜 · iOS（Beta 0.3.0）
 
-一个自用的本地有声书播放器：导入音频、后台播放、断点续播、跳过片头片尾、定时关闭、快捷指令控制。
+一个自用的本地有声书播放器：导入音频 / 整个文件夹、按歌单连播、后台播放、断点续播、跳过片头片尾、定时关闭、快捷指令控制。只有两个页面：书库和设置。
 
 **核心结论：能做完，而且不需要买 Mac。** iOS 的编译链只有 Xcode（只能在 macOS 上跑），但可以用 GitHub 的免费 macOS 机器把代码编译成 `.ipa`，再在 Windows 上用 Sideloadly 签进你的 iPhone。
 
@@ -10,13 +10,13 @@
 
 | 需求 | 实现方式 | 对应代码 |
 | --- | --- | --- |
-| 1. 本地导入音频 | 系统文件选择器 / 文件夹 / 拖拽 → 拷贝进 App 沙盒 `Documents/Audio/` | `Services/ImportService.swift`、`Views/LibraryView.swift` |
+| 1. 本地导入音频 | 系统文件选择器 / 文件夹 / 拖拽 → 拷贝进 App 沙盒 `Documents/Audio/`；**文件夹导入自动生成同名歌单** | `Services/ImportService.swift`、`Views/LibraryView.swift` |
 | 2. 定时播放 | 倒计时到点前 3 秒淡出再暂停；另有「本章结束后停止」 | `Services/SleepTimer.swift`、`Services/AudioEngine.swift`（`fadeOutAndPause`） |
 | 3. 自定义跳过头尾 | 每本书单独设置片头/片尾秒数，可一键应用全部 | `Services/AudioEngine.swift`（`resumePosition` / `tick()` / `handleFinish`） |
 | 4. 快捷指令 | App Intents + Siri 短语：播放、暂停、快进后退、定时、取消定时、本章结束停 | `Intents/PlaybackIntents.swift` |
 | 5. 断点续播 | 每 5 秒 + 暂停/切后台时把位置写入 `library.json`，冷启动自动装回上次那本 | `Services/AudioEngine.swift`（`persistProgress` / `restoreLastSession`） |
 
-顺手做了的：后台播放、锁屏/耳机线控/车机控制、15 秒快进快退、0.5–2.5 倍速、播放队列、来电打断后续播、搜索、四种排序、自动提取音频内嵌封面。
+顺手做了的：歌单管理（播放/重命名/整单删除）、后台播放、锁屏/耳机线控/车机控制、15 秒快退 30 秒快进、0.75–2x 倍速、来电打断后续播、搜索、四种排序、自动提取音频内嵌封面、设置页（倍速/跳过头尾/占用空间/清空书库/快捷指令说明）。
 
 技术栈：SwiftUI + AVAudioPlayer + MediaPlayer + App Intents，最低 iOS 16，无第三方依赖。
 
@@ -30,6 +30,16 @@
 - 自修复：启动时对齐索引与磁盘，文件丢了不显示死条目，手工塞进 `Documents/Audio` 的文件会被自动收养
 - 播放页：左上角「从头播放」，倍速、定时、片头片尾三个入口
 - 快进指令：快捷指令里可直接「快进 300 秒」（负数即后退）
+
+### 0.3.0 比 0.2.0 多了什么
+
+- **改名**：桌面图标和 App 内都叫「雅拉马喜」（`project.yml` 里的 `CFBundleDisplayName`）
+- **歌单**：选文件夹导入时，文件夹名自动变成歌单名；点歌单从第一集没听完的开始连播，播完自动下一集；左滑删除能选「只解散歌单」或「连音频一起删」；长按可重命名、播放整单
+- **连播队列**：歌单播放时进的是队列，`playNext` / `playPrevious` 走队列顺序；手动点单本会退出队列、回到书库顺序
+- **两个页面**：底部 Tab 只有「书库」和「设置」，关于页收进设置
+- **设置页**：倍速、定时播放状态、全书库片头片尾统一设置、排序、音频数/歌单数/总时长/占用空间、清空书库、快捷指令一览
+- **迷你播放条**：显示当前歌单名；定时倒计时也显示在条上
+- **索引格式升级**：`library.json` 从裸数组变成 `{version, books, playlists}`，**旧的 0.2 数据自动兼容读取**，升级不会丢书
 
 ---
 
@@ -98,17 +108,17 @@ git push -u origin main
 6. 完成后手机上：**设置 → 通用 → VPN与设备管理 → 开发者 App → 信任**
 7. 如果提示需要开发者模式：**设置 → 隐私与安全性 → 开发者模式 → 打开 → 重启**
 
-### 4. 打开 App，导入书
+### 4. 打开「雅拉马喜」，导入书
 
 - 点「导入音频文件」选一个或多个 mp3、m4a、m4b、flac
-- 或点「导入整个文件夹」，整个专辑/整季一次性进来，按文件名自然排序
+- 或点「导入文件夹（自动成歌单）」，整个专辑/整季一次性进来，按文件名自然排序，并在书库顶部生成一个同名歌单
 - 或从「文件」App 长按音频拖进 App 窗口
 - 文件会被拷进 App 沙盒，之后即使原文件删了也能播
 - 另一条路：数据线连电脑 → iTunes → 文件共享 → 有声书 → 把文件拖进 Documents（下次启动自动收养）
 
 ### 5. 配快捷指令
 
-打开系统「快捷指令」App → 新建 → 搜索 App 名「有声书」，能看到这些动作：
+打开系统「快捷指令」App → 新建 → 搜索 App 名「雅拉马喜」，能看到这些动作：
 
 | 动作 | 用途 |
 | --- | --- |
@@ -123,7 +133,7 @@ git push -u origin main
 
 - 睡前自动化：`设置定时播放 30 分钟` → `播放有声书`
 - 通勤：`播放有声书` 书名填「三体」
-- 也能直接对 Siri 说「用有声书播放有声书」「用有声书设置定时播放」
+- 也能直接对 Siri 说「用雅拉马喜播放」「用雅拉马喜设置定时播放」
 
 ---
 
@@ -148,8 +158,9 @@ ios-audiobook/
 ├── tools/make_icon.py               # 生成 1024 图标
 └── AudiobookPlayer/
     ├── App/AudiobookPlayerApp.swift # 入口，注入三个单例
-    ├── Models/Audiobook.swift       # 数据模型 + 进度/已听完 + 时间格式化
-    ├── Store/LibraryStore.swift     # 书库：JSON 落盘、增删、排序搜索、自修复
+    ├── Models/Audiobook.swift       # 单本音频：进度/已听完/片头片尾
+    ├── Models/Playlist.swift        # 歌单：只存书 ID，删歌单不误删文件
+    ├── Store/LibraryStore.swift     # 书库 + 歌单：JSON 落盘、增删、排序搜索、占用统计、自修复
     ├── Services/
     │   ├── ImportService.swift      # 安全作用域授权 → 拷贝 → 读时长 → 抓封面
     │   ├── CoverService.swift       # 从音频元数据提封面，带内存缓存
@@ -157,10 +168,11 @@ ios-audiobook/
     │   └── SleepTimer.swift         # 定时关闭
     ├── Intents/PlaybackIntents.swift# App Intents + Siri 短语
     ├── Views/
-    │   ├── RootView.swift           # 导航 + 迷你播放条 + 冷启动恢复
-    │   ├── LibraryView.swift        # 书库、导入、搜索、排序、关于
+    │   ├── RootView.swift           # 两个 Tab + 迷你播放条 + 冷启动恢复
+    │   ├── LibraryView.swift        # 书库：导入、歌单、全部音频、搜索、排序
     │   ├── PlayerView.swift         # 播放页（封面、进度、倍速、定时、片头片尾）
-    │   └── Sheets.swift             # 定时播放、片头片尾弹窗
+    │   ├── SettingsView.swift       # 设置：倍速、片头片尾、存储、快捷指令说明
+    │   └── Sheets.swift             # 定时播放、片头片尾、歌单重命名弹窗
     └── Assets.xcassets/             # 图标
 ```
 
@@ -174,13 +186,16 @@ ios-audiobook/
 - **打断续播**在 `observeInterruptions()`：`began` 暂停，`ended` 且 `shouldResume` 时续播。
 - **淡出**在 `fadeOutAndPause()`：`setVolume(0, fadeDuration:)` 让系统做 3 秒线性衰减，再 pause。
 - **自修复**在 `LibraryStore.reconcile()`：启动时丢掉磁盘上已不存在的条目，收养手工丢进 `Audio/` 的文件。
+- **文件夹即歌单**在 `ImportService.importFiles`：目录导入结束后 `store.createPlaylist(name:bookIDs:)`，同名歌单自动合并，不会越导越多。
+- **连播队列**在 `AudioEngine.queue` + `orderedBooks`：有队列走队列，没有就走书库；`play()` 会先 `clearQueue()`，歌单内部用 `playTrack()` 避免自己把自己清掉。
+- **删歌单**在 `LibraryStore.removePlaylist(id:deleteFiles:)`：`deleteFiles` 为真时才真删音频文件，否则只是解散歌单，书还在「全部音频」里。
 
 ---
 
 ## 六、下一步可以加什么
 
 - 章节识别（m4b 内嵌章节、CUE 文件）
-- 导入时按文件名自动分组（「书名-01.mp3」→ 一本书多集，现在是一集一条）
+- 按文件名把「书名-01.mp3」这类多集自动归成一本（现在是一集一条，靠文件夹歌单兜住）
 - iCloud 书库同步
 - CarPlay / 蓝牙车载
 - 手动换封面、编辑书名
@@ -202,4 +217,6 @@ ios-audiobook/
 | 导入了但列表没出现 | 文件扩展名不在白名单，看 `ImportService.supportedExtensions` |
 | 导入提示「跳过重复」 | 同名书已在库里（按标题判重），改名后再导 |
 | 快捷指令里搜不到 App | 先手动打开一次 App，再回到快捷指令 App 搜索 |
+| 改名后桌面还是「有声书」 | 卸掉重装（图标名随 ipa 走，覆盖安装有时读缓存） |
+| 歌单点不动 / 是空的 | 歌单里的音频被单本删掉了，删掉这个歌单重新导文件夹 |
 | 书没封面 | 该文件本身没内嵌图，或格式是 wav/flac 这类不含封面的容器 |
