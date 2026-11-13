@@ -118,6 +118,39 @@ fn read_password(email: &str) -> Result<String, String> {
     })
 }
 
+/// 自己解压 ipa，绕开 isideload 在 Windows 上 `create_dir_all` 失败的 bug
+/// （isideload/src/sideload/application.rs:57 报 os error 5）。
+/// `Application::new` 只在路径是文件时才解压；传目录就直接当 bundle 用。
+fn extract_ipa(ipa: &std::path::Path) -> Result<PathBuf, String> {
+    use std::fs;
+
+    let stem = ipa
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "app".to_string());
+    let dest = env::temp_dir().join(format!("yalasign-{}-{}", stem, std::process::id()));
+    if dest.exists() {
+        let _ = fs::remove_dir_all(&dest);
+    }
+    fs::create_dir_all(&dest).map_err(|e| format!("创建临时目录失败: {e}"))?;
+
+    let file = fs::File::open(ipa).map_err(|e| format!("打开 IPA 失败: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("解析 IPA 失败: {e}"))?;
+    archive
+        .extract(&dest)
+        .map_err(|e| format!("解压 IPA 失败: {e}"))?;
+
+    let payload = dest.join("Payload");
+    let entries = fs::read_dir(&payload).map_err(|e| format!("读取 Payload 失败: {e}"))?;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() && p.extension().map(|e| e == "app").unwrap_or(false) {
+            return Ok(p);
+        }
+    }
+    Err("IPA 的 Payload 里没有 .app 目录".to_string())
+}
+
 type TfaBox = Box<
     dyn Fn(TwoFactorCallbackParams) -> futures::future::BoxFuture<'static, Result<TwoFactorCallbackResponse, rootcause::Report>>
         + Send
@@ -312,11 +345,20 @@ async fn main() {
         return;
     }
 
-    println!("[3/4] 签名并安装 …");
+    println!("[3/4] 解压并签名 …");
+    let app_bundle = match extract_ipa(&ipa) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    println!("      bundle: {}", app_bundle.display());
+
     let result = sideloader
         .install_app(
             &provider,
-            ipa,
+            app_bundle,
             true,
             None::<fn(f32) -> std::future::Ready<()>>,
             None,
