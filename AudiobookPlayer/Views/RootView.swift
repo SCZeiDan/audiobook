@@ -48,6 +48,11 @@ struct RootView: View {
             switch phase {
             case .background, .inactive:
                 engine.persistProgress()
+            case .active:
+                // 从「文件」App 往 Audio/ 里拖完切回来，立刻把新文件 / 新文件夹收进来
+                store.reconcile()
+                AudioEngine.shared.refreshCurrentBookFromStore()
+                Task { await store.refreshMissingDurations() }
             default:
                 break
             }

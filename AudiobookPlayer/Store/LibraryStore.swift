@@ -55,6 +55,7 @@ final class LibraryStore: ObservableObject {
     private var sortedCache: [Audiobook]?
     private var indexCache: [UUID: Audiobook]?
     private var storageCache: (bytes: Int64, at: Date)?
+    private var lastReconcileAt: Date = .distantPast
 
     private let fm = FileManager.default
     private static let writeQueue = DispatchQueue(
@@ -396,28 +397,79 @@ final class LibraryStore: ObservableObject {
 
     // MARK: - 自修复
 
-    /// 启动时对齐磁盘与索引：丢掉已消失的文件，收养手工丢进 Audio/ 的文件
+    /// 启动 / 回到前台时对齐磁盘与索引：
+    /// 1. 丢掉已消失的文件
+    /// 2. 收养直接丢进 Audio/ 的散文件
+    /// 3. 收养丢进 Audio/ 的子文件夹 —— 文件夹名当歌单名，里面的音频搬进根目录
     func reconcile() {
+        // 回到前台会触发一次，启动时 .task 也会触发一次，1.5 秒内只认真扫一遍
+        let now = Date()
+        guard now.timeIntervalSince(lastReconcileAt) > 1.5 else { return }
+        lastReconcileAt = now
+
         var kept: [Audiobook] = []
         for book in books where fm.fileExists(atPath: fileURL(for: book).path) {
             kept.append(book)
         }
 
-        let names = (try? fm.contentsOfDirectory(atPath: audioDirectory.path)) ?? []
-        let known = Set(kept.map { $0.fileName })
+        var known = Set(kept.map { $0.fileName })
         var adopted = false
-        for name in names where !known.contains(name) {
-            let ext = (name as NSString).pathExtension.lowercased()
-            guard ImportService.supportedExtensions.contains(ext) else { continue }
-            let title = (name as NSString).deletingPathExtension
-            kept.append(
-                Audiobook(
-                    title: title,
+        var folderDrops: [String: [UUID]] = [:]
+
+        let names = (try? fm.contentsOfDirectory(atPath: audioDirectory.path)) ?? []
+        for name in names {
+            let full = audioDirectory.appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: full.path, isDirectory: &isDir) else { continue }
+
+            if isDir.boolValue {
+                // 文件夹 = 歌单。里面的音频逐个搬进根目录改名 UUID，避免同名覆盖
+                let folderName = name
+                let inner = ((try? fm.contentsOfDirectory(atPath: full.path)) ?? [])
+                    .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+                var ids: [UUID] = []
+
+                for entry in inner {
+                    let ext = (entry as NSString).pathExtension.lowercased()
+                    guard ImportService.supportedExtensions.contains(ext) else { continue }
+
+                    let destination = audioDirectory
+                        .appendingPathComponent(UUID().uuidString)
+                        .appendingPathExtension(ext)
+                    guard (try? fm.moveItem(at: full.appendingPathComponent(entry), to: destination)) != nil else {
+                        continue
+                    }
+
+                    let book = Audiobook(
+                        title: (entry as NSString).deletingPathExtension,
+                        fileName: destination.lastPathComponent,
+                        fileExtension: ext
+                    )
+                    kept.append(book)
+                    known.insert(book.fileName)
+                    ids.append(book.id)
+                    adopted = true
+                }
+
+                if !ids.isEmpty { folderDrops[folderName] = ids }
+
+                // 音频都搬走了就删掉空文件夹，下次启动不再重复扫
+                if ((try? fm.contentsOfDirectory(atPath: full.path)) ?? []).isEmpty {
+                    try? fm.removeItem(at: full)
+                }
+            } else {
+                guard !known.contains(name) else { continue }
+                let ext = (name as NSString).pathExtension.lowercased()
+                guard ImportService.supportedExtensions.contains(ext) else { continue }
+                let book = Audiobook(
+                    title: (name as NSString).deletingPathExtension,
                     fileName: name,
                     fileExtension: ext
                 )
-            )
-            adopted = true
+                kept.append(book)
+                known.insert(name)
+                adopted = true
+            }
         }
 
         if kept.count != books.count || adopted {
@@ -427,6 +479,11 @@ final class LibraryStore: ObservableObject {
             purgePlaylists(removed)
             invalidateCaches()
             save()
+        }
+
+        // 文件夹 → 歌单。createPlaylist 遇到同名会合并，反复拖同一个文件夹不会堆歌单
+        for (folderName, ids) in folderDrops {
+            createPlaylist(name: folderName, bookIDs: ids)
         }
     }
 
