@@ -2,6 +2,14 @@ import Foundation
 import Combine
 
 /// 书库与歌单的唯一数据源：负责落盘、增删、排序、进度更新、磁盘自修复。
+///
+/// 1500 本以上的书库有个坑：SwiftUI 的 body 里任何一次全量排序 / 建字典 /
+/// 目录 stat 都会变成可感知的卡顿。所以这里做了四件事：
+/// 1. `books` 不再是 `@Published`，播放中的进度回写走 `recordProgress(_:notifyUI:)`
+///    静默路径，不惊动界面；只有真正的结构变化才 `objectWillChange.send()`；
+/// 2. 排序结果和 id 索引带缓存，数据一变就失效；
+/// 3. JSON 编码去掉 prettyPrinted，写盘挪到后台串行队列，主线程不碰磁盘；
+/// 4. 歌单行改用 `playlistStats(_:)`，不再为每一行重建 1500 项字典。
 @MainActor
 final class LibraryStore: ObservableObject {
     static let shared = LibraryStore()
@@ -34,11 +42,25 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    @Published private(set) var books: [Audiobook] = []
+    /// 书库。故意不加 `@Published`：播放时每 30 秒一次的进度回写如果触发全量刷新，
+    /// 1500 行列表就要反复重排。结构变化由 `libraryChanged()` 手动发通知。
+    private(set) var books: [Audiobook] = []
     @Published private(set) var playlists: [Playlist] = []
-    @Published var sortOrder: SortOrder = .added
+    @Published var sortOrder: SortOrder = .added {
+        didSet { sortedCache = nil }
+    }
+
+    // MARK: - 缓存
+
+    private var sortedCache: [Audiobook]?
+    private var indexCache: [UUID: Audiobook]?
+    private var storageCache: (bytes: Int64, at: Date)?
 
     private let fm = FileManager.default
+    private static let writeQueue = DispatchQueue(
+        label: "com.yg.audiobook.library-write",
+        qos: .utility
+    )
 
     /// 音频文件统一放 Documents/Audio/，避免外部 URL 失效
     var audioDirectory: URL {
@@ -84,6 +106,23 @@ final class LibraryStore: ObservableObject {
         reconcile()
     }
 
+    // MARK: - 缓存失效
+
+    /// 结构变化：清缓存 + 通知界面重绘
+    private func libraryChanged() {
+        sortedCache = nil
+        indexCache = nil
+        storageCache = nil
+        objectWillChange.send()
+    }
+
+    /// 只清缓存，不发通知（静默回写进度时用）
+    private func invalidateCaches() {
+        sortedCache = nil
+        indexCache = nil
+        storageCache = nil
+    }
+
     // MARK: - 文件定位
 
     func fileURL(for book: Audiobook) -> URL {
@@ -108,15 +147,20 @@ final class LibraryStore: ObservableObject {
             books = legacy
             playlists = []
         }
+        invalidateCaches()
     }
 
+    /// 编码在主线程（1500 条约 10ms），写盘丢到后台串行队列，绝不阻塞滚动
     func save() {
         let file = LibraryFile(version: 2, books: books, playlists: playlists)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(file) else { return }
-        try? data.write(to: indexURL, options: .atomic)
+        let url = indexURL
+        LibraryStore.writeQueue.async {
+            try? data.write(to: url, options: .atomic)
+        }
     }
 
     // MARK: - 书籍增删改
@@ -124,12 +168,32 @@ final class LibraryStore: ObservableObject {
     func add(_ newBooks: [Audiobook]) {
         guard !newBooks.isEmpty else { return }
         books.append(contentsOf: newBooks)
+        libraryChanged()
         save()
     }
 
     func update(_ book: Audiobook) {
         guard let i = books.firstIndex(where: { $0.id == book.id }) else { return }
         books[i] = book
+        libraryChanged()
+        save()
+    }
+
+    /// 播放进度回写（高频路径）。
+    ///
+    /// - Parameter notifyUI: `true` 表示暂停 / 切集 / 退到后台这类用户能感知的时刻，
+    ///   需要刷新列表上的进度条；播放中的定时回写传 `false`，只更新内存和磁盘。
+    func recordProgress(_ book: Audiobook, notifyUI: Bool) {
+        guard let i = books.firstIndex(where: { $0.id == book.id }) else { return }
+        books[i].lastPosition = book.lastPosition
+        books[i].lastPlayedAt = book.lastPlayedAt
+        if book.duration > 0 {
+            books[i].duration = book.duration
+        }
+        invalidateCaches()
+        if notifyUI {
+            objectWillChange.send()
+        }
         save()
     }
 
@@ -147,6 +211,7 @@ final class LibraryStore: ObservableObject {
         let ids = Set(doomed.map { $0.id })
         books.removeAll { ids.contains($0.id) }
         purgePlaylists(ids)
+        libraryChanged()
         save()
     }
 
@@ -168,15 +233,40 @@ final class LibraryStore: ObservableObject {
             books[i].skipIntro = intro
             books[i].skipOutro = outro
         }
+        libraryChanged()
         save()
     }
 
-    // MARK: - 歌单
+    // MARK: - 查询（全部走缓存）
+
+    /// O(1) 取单本
+    func book(id: UUID) -> Audiobook? {
+        if indexCache == nil {
+            indexCache = Dictionary(
+                books.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+        }
+        return indexCache?[id]
+    }
 
     func books(in playlist: Playlist) -> [Audiobook] {
-        let map = Dictionary(uniqueKeysWithValues: books.map { ($0.id, $0) })
-        return playlist.bookIDs.compactMap { map[$0] }
+        playlist.bookIDs.compactMap { book(id: $0) }
     }
+
+    /// 歌单行要显示的「几集 · 多长」，避免每行都遍历全库
+    func playlistStats(_ playlist: Playlist) -> (count: Int, duration: Double) {
+        var count = 0
+        var total: Double = 0
+        for id in playlist.bookIDs {
+            guard let b = book(id: id) else { continue }
+            count += 1
+            total += b.duration
+        }
+        return (count, total)
+    }
+
+    // MARK: - 歌单
 
     func playlist(id: UUID?) -> Playlist? {
         guard let id = id else { return nil }
@@ -225,6 +315,7 @@ final class LibraryStore: ObservableObject {
         }
 
         playlists.removeAll { $0.id == id }
+        libraryChanged()
         save()
     }
 
@@ -244,8 +335,15 @@ final class LibraryStore: ObservableObject {
 
     // MARK: - 列表
 
-    /// 搜索 + 排序后的结果，供书库列表使用
+    /// 搜索 + 排序后的结果，供书库列表使用。排序结果带缓存，body 反复求值也不重排。
     func visibleBooks(keyword: String) -> [Audiobook] {
+        let key = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return sortedAll() }
+        return sortedAll().filter { $0.title.localizedCaseInsensitiveContains(key) }
+    }
+
+    private func sortedAll() -> [Audiobook] {
+        if let cached = sortedCache { return cached }
         var list = books
         switch sortOrder {
         case .added:
@@ -257,18 +355,20 @@ final class LibraryStore: ObservableObject {
         case .progress:
             list.sort { $0.progress < $1.progress }
         }
-
-        let key = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return list }
-        return list.filter { $0.title.localizedCaseInsensitiveContains(key) }
+        sortedCache = list
+        return list
     }
 
     var totalDuration: Double {
         books.reduce(0) { $0 + $1.duration }
     }
 
-    /// 已占用空间（音频 + 封面），用于设置页显示
+    /// 已占用空间（音频 + 封面），用于设置页显示。1500 个文件 stat 一遍要十几毫秒，
+    /// 所以结果缓存 60 秒。
     var storageBytes: Int64 {
+        if let cached = storageCache, Date().timeIntervalSince(cached.at) < 60 {
+            return cached.bytes
+        }
         var total: Int64 = 0
         for dir in [audioDirectory, coverDirectory] {
             let names = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
@@ -278,6 +378,7 @@ final class LibraryStore: ObservableObject {
                 total += (attrs?[.size] as? NSNumber)?.int64Value ?? 0
             }
         }
+        storageCache = (total, Date())
         return total
     }
 
@@ -289,6 +390,7 @@ final class LibraryStore: ObservableObject {
         books = []
         playlists = []
         try? fm.removeItem(at: indexURL)
+        libraryChanged()
         save()
     }
 
@@ -303,6 +405,7 @@ final class LibraryStore: ObservableObject {
 
         let names = (try? fm.contentsOfDirectory(atPath: audioDirectory.path)) ?? []
         let known = Set(kept.map { $0.fileName })
+        var adopted = false
         for name in names where !known.contains(name) {
             let ext = (name as NSString).pathExtension.lowercased()
             guard ImportService.supportedExtensions.contains(ext) else { continue }
@@ -314,24 +417,31 @@ final class LibraryStore: ObservableObject {
                     fileExtension: ext
                 )
             )
+            adopted = true
         }
 
-        if kept.count != books.count {
+        if kept.count != books.count || adopted {
             let alive = Set(kept.map { $0.id })
             let removed = Set(books.map { $0.id }).subtracting(alive)
             books = kept
             purgePlaylists(removed)
+            invalidateCaches()
             save()
         }
     }
 
     /// 给「收养」进来的文件补时长；读不到就等首次播放时由播放器补齐
     func refreshMissingDurations() async {
+        var changed = false
         for book in books where book.duration <= 0 {
             let value = await ImportService.duration(of: fileURL(for: book))
             guard value > 0, let index = books.firstIndex(where: { $0.id == book.id }) else { continue }
             books[index].duration = value
+            changed = true
         }
-        save()
+        if changed {
+            libraryChanged()
+            save()
+        }
     }
 }

@@ -42,6 +42,7 @@ struct RootView: View {
                 .environmentObject(engine)
                 .environmentObject(store)
                 .environmentObject(sleepTimer)
+                .environmentObject(engine.clock)
         }
         .onChange(of: scenePhase) { phase in
             switch phase {
@@ -79,10 +80,13 @@ struct MiniPlayerBar: View {
                         .font(.subheadline.weight(.medium))
                         .lineLimit(1)
 
-                    Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    // 只让这一行文字每秒自己刷新，迷你条其余部分不动
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
 
                 Spacer(minLength: 0)

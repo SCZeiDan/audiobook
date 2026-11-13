@@ -151,7 +151,7 @@ struct LibraryView: View {
             ForEach(store.playlists) { list in
                 PlaylistRow(
                     playlist: list,
-                    books: store.books(in: list),
+                    stats: store.playlistStats(list),
                     isCurrent: engine.queueName == list.name && engine.currentBook != nil
                 )
                 .contentShape(Rectangle())
@@ -295,7 +295,8 @@ struct LibraryView: View {
 
 struct PlaylistRow: View {
     let playlist: Playlist
-    let books: [Audiobook]
+    /// 集数和总时长由 store 一次算好，行内不再遍历全库
+    let stats: (count: Int, duration: Double)
     let isCurrent: Bool
 
     var body: some View {
@@ -312,7 +313,7 @@ struct PlaylistRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(playlist.name)
                     .lineLimit(1)
-                Text("\(books.count) 集 · \(Audiobook.timeString(totalDuration))")
+                Text("\(stats.count) 集 · \(Audiobook.timeString(stats.duration))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -324,10 +325,6 @@ struct PlaylistRow: View {
                 .foregroundStyle(Color.accentColor)
         }
         .padding(.vertical, 4)
-    }
-
-    private var totalDuration: Double {
-        books.reduce(0) { $0 + $1.duration }
     }
 }
 
@@ -416,6 +413,11 @@ struct BookCoverView: View {
 
     private var loadedImage: UIImage? {
         guard let name = book?.coverFileName else { return nil }
-        return CoverService.image(named: name, directory: LibraryStore.shared.coverDirectory)
+        // 列表里只解出小图：48pt × 3 倍屏 = 144px，一张几十 KB
+        return CoverService.thumbnail(
+            named: name,
+            directory: LibraryStore.shared.coverDirectory,
+            maxPixel: size * 3
+        )
     }
 }

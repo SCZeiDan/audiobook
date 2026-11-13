@@ -11,9 +11,16 @@ final class AudioEngine: NSObject, ObservableObject {
 
     @Published private(set) var currentBook: Audiobook?
     @Published private(set) var isPlaying = false
-    @Published private(set) var currentTime: Double = 0
-    @Published private(set) var duration: Double = 0
     @Published private(set) var rate: Float = 1.0
+
+    /// 播放位置和总时长放在独立对象里。
+    /// 它们每 0.25 秒变一次，如果留在这里，所有订阅 `engine` 的视图（包括 1500 行的
+    /// 书库列表）都会被拖着重算 body —— 这就是「一播放就卡」的根因。
+    let clock: PlaybackClock
+
+    /// 只读转发，老代码 `engine.currentTime` 照常能用
+    var currentTime: Double { clock.currentTime }
+    var duration: Double { clock.duration }
     /// 播放失败等需要告诉用户的错误，UI 弹完记得清空
     @Published var lastError: String?
 
@@ -25,6 +32,7 @@ final class AudioEngine: NSObject, ObservableObject {
     private var interruptionObserver: NSObjectProtocol?
 
     private override init() {
+        clock = PlaybackClock()
         super.init()
         rate = AudioEngine.storedRate
         configureSession()
@@ -129,8 +137,7 @@ final class AudioEngine: NSObject, ObservableObject {
         }
 
         currentBook = book
-        duration = player.duration
-        currentTime = player.currentTime
+        clock.reset(time: player.currentTime, duration: player.duration)
 
         player.play()
         player.rate = rate
@@ -188,8 +195,7 @@ final class AudioEngine: NSObject, ObservableObject {
         player?.stop()
         player = nil
         isPlaying = false
-        currentTime = 0
-        duration = 0
+        clock.reset(time: 0, duration: 0)
         currentBook = nil
         stopTicker()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
@@ -200,7 +206,7 @@ final class AudioEngine: NSObject, ObservableObject {
         let upper = max(0, player.duration - 0.25)
         let clamped = min(max(0, time), upper)
         player.currentTime = clamped
-        currentTime = clamped
+        clock.reset(time: clamped, duration: player.duration)
         persistProgress()
         updateNowPlaying()
     }
@@ -274,9 +280,8 @@ final class AudioEngine: NSObject, ObservableObject {
     /// 连播顺序：有队列走队列，否则走书库
     private var orderedBooks: [Audiobook] {
         if !queue.isEmpty {
-            let all = LibraryStore.shared.books
-            let map = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
-            let list = queue.compactMap { map[$0] }
+            let store = LibraryStore.shared
+            let list = queue.compactMap { store.book(id: $0) }
             if !list.isEmpty { return list }
         }
         return LibraryStore.shared.books
@@ -330,10 +335,9 @@ final class AudioEngine: NSObject, ObservableObject {
             fresh.prepareToPlay()
             player = fresh
             currentBook = book
-            duration = fresh.duration
             let position = AudioEngine.resumePosition(book: book, duration: fresh.duration)
             fresh.currentTime = min(position, max(0, fresh.duration - 1))
-            currentTime = fresh.currentTime
+            clock.reset(time: fresh.currentTime, duration: fresh.duration)
             isPlaying = false
             updateNowPlaying()
         } catch {
@@ -371,7 +375,8 @@ final class AudioEngine: NSObject, ObservableObject {
 
     private func tick() {
         guard let player = self.player, let book = currentBook else { return }
-        currentTime = player.currentTime
+        // 只喂给时钟对象，不碰 engine 自己的 @Published，列表不会跟着重算
+        clock.ticking(time: player.currentTime, duration: player.duration)
 
         // 片尾跳过：剩余时长 <= skipOutro 时直接结算
         let outro = max(0, book.skipOutro)
@@ -381,10 +386,14 @@ final class AudioEngine: NSObject, ObservableObject {
         }
 
         tickCounter += 1
-        if tickCounter >= 20 {          // 每 5 秒落盘一次，避免频繁写 JSON
-            tickCounter = 0
-            persistProgress()
+        // 锁屏进度条每 5 秒对齐一次（只写字典，很便宜）
+        if tickCounter % 20 == 0 {
             updateNowPlaying()
+        }
+        // 落盘每 30 秒一次：够防丢进度，又不会让 1500 条的 JSON 编码反复打扰主线程
+        if tickCounter >= 120 {
+            tickCounter = 0
+            persistProgress(notifyUI: false)
         }
     }
 
@@ -410,7 +419,7 @@ final class AudioEngine: NSObject, ObservableObject {
         // 「本章结束后停止」
         if SleepTimer.shared.stopAtEndOfTrack {
             SleepTimer.shared.cancel()
-            currentTime = finishedDuration
+            clock.reset(time: finishedDuration, duration: finishedDuration)
             updateNowPlaying()
             return
         }
@@ -418,7 +427,7 @@ final class AudioEngine: NSObject, ObservableObject {
         if autoAdvance {
             playNext()
         } else {
-            currentTime = finishedDuration
+            clock.reset(time: finishedDuration, duration: finishedDuration)
             updateNowPlaying()
         }
     }
@@ -430,15 +439,17 @@ final class AudioEngine: NSObject, ObservableObject {
         currentBook = latest
     }
 
-    func persistProgress() {
-        guard var book = currentBook, let player = self.player else { return }
+    func persistProgress(notifyUI: Bool = true) {
+        guard let player = self.player, var book = currentBook else { return }
         book.lastPosition = player.currentTime
         book.lastPlayedAt = Date()
         if book.duration <= 0 {
             book.duration = player.duration
         }
-        LibraryStore.shared.update(book)
-        currentBook = book
+        LibraryStore.shared.recordProgress(book, notifyUI: notifyUI)
+        if notifyUI {
+            currentBook = book
+        }
     }
 
     /// 索引里的时长和真实时长对不上（导入时读失败过）就修正
@@ -565,10 +576,14 @@ extension AudioEngine {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
-    /// 有内嵌封面就用封面，没有就退回 App 图标
+    /// 有内嵌封面就用封面，没有就退回 App 图标。锁屏图不需要 1200px，降到 600px 省内存
     private func artwork(for book: Audiobook) -> MPMediaItemArtwork? {
         if let name = book.coverFileName,
-           let image = CoverService.image(named: name, directory: LibraryStore.shared.coverDirectory) {
+           let image = CoverService.thumbnail(
+                named: name,
+                directory: LibraryStore.shared.coverDirectory,
+                maxPixel: 600
+           ) {
             return MPMediaItemArtwork(boundsSize: image.size) { _ in image }
         }
         if let icon = UIImage(named: "AppIcon") {

@@ -1,4 +1,4 @@
-# 雅拉马喜 · iOS（Beta 0.3.0）
+# 雅拉马喜 · iOS（Beta 0.3.1）
 
 一个自用的本地有声书播放器：导入音频 / 整个文件夹、按歌单连播、后台播放、断点续播、跳过片头片尾、定时关闭、快捷指令控制。只有两个页面：书库和设置。
 
@@ -14,7 +14,7 @@
 | 2. 定时播放 | 倒计时到点前 3 秒淡出再暂停；另有「本章结束后停止」 | `Services/SleepTimer.swift`、`Services/AudioEngine.swift`（`fadeOutAndPause`） |
 | 3. 自定义跳过头尾 | 每本书单独设置片头/片尾秒数，可一键应用全部 | `Services/AudioEngine.swift`（`resumePosition` / `tick()` / `handleFinish`） |
 | 4. 快捷指令 | App Intents + Siri 短语：播放、暂停、快进后退、定时、取消定时、本章结束停 | `Intents/PlaybackIntents.swift` |
-| 5. 断点续播 | 每 5 秒 + 暂停/切后台时把位置写入 `library.json`，冷启动自动装回上次那本 | `Services/AudioEngine.swift`（`persistProgress` / `restoreLastSession`） |
+| 5. 断点续播 | 播放中每 30 秒 + 暂停/切后台时把位置写入 `library.json`，冷启动自动装回上次那本 | `Services/AudioEngine.swift`（`persistProgress` / `restoreLastSession`） |
 
 顺手做了的：歌单管理（播放/重命名/整单删除）、后台播放、锁屏/耳机线控/车机控制、15 秒快退 30 秒快进、0.75–2x 倍速、来电打断后续播、搜索、四种排序、自动提取音频内嵌封面、设置页（倍速/跳过头尾/占用空间/清空书库/快捷指令说明）。
 
@@ -30,6 +30,21 @@
 - 自修复：启动时对齐索引与磁盘，文件丢了不显示死条目，手工塞进 `Documents/Audio` 的文件会被自动收养
 - 播放页：左上角「从头播放」，倍速、定时、片头片尾三个入口
 - 快进指令：快捷指令里可直接「快进 300 秒」（负数即后退）
+
+### 0.3.1 修了什么（1500 本播放时卡顿）
+
+症状：导入 1500 多个文件后开始播放，再上下滑动书库/歌单列表就卡；不播的时候不卡。
+
+根因是播放中的进度刷新在「每秒 4 次叫醒整个界面」，跟文件多少叠加放大：
+
+| 根因 | 后果 | 改法 |
+| --- | --- | --- |
+| `AudioEngine.currentTime` 每 0.25 秒 `@Published` 一次 | 所有订阅 `engine` 的视图（含 1500 行列表）每秒重算 4 次 body | 拆出独立的 `PlaybackClock` 环境对象，只有播放页/迷你条读它；`engine.currentTime` 变成只读转发 |
+| 每 5 秒回写进度就整表替换 `books` | `@Published books` 全量刷新 + 主线程编码 600KB JSON 写盘（30–80ms 尖峰） | `books` 不再 `@Published`，进度走 `recordProgress(_:notifyUI:)` 静默路径；落盘降到 30 秒一次、编码放后台串行队列 |
+| `visibleBooks` 每次 body 全量排序、每个歌单行重建 1500 项字典 | 滑动时 CPU 打满 | 排序结果 / id 索引 / 占用空间都加缓存，数据变才失效；歌单行改用 O(1) 的 `playlistStats(_:)` |
+| 列表封面缓存 1200px 原图 | 1500 张解码约 8.5GB，NSCache 反复驱逐、滚动时反复解全尺寸 | 新增 `CGImageSourceCreateThumbnailAtIndex` 降采样缩略图缓存（列表 144px、迷你条 120px、播放页 720px 分层） |
+
+另外：主线程不再有任何同步写盘；`library.json` 去掉 `prettyPrinted`；锁屏进度条改为 5 秒对齐一次。
 
 ### 0.3.0 比 0.2.0 多了什么
 

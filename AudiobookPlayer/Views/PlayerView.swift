@@ -2,6 +2,7 @@ import SwiftUI
 
 struct PlayerView: View {
     @EnvironmentObject private var engine: AudioEngine
+    @EnvironmentObject private var clock: PlaybackClock
     @EnvironmentObject private var sleepTimer: SleepTimer
     @Environment(\.dismiss) private var dismiss
 
@@ -98,23 +99,28 @@ struct PlayerView: View {
 
     private var coverImage: UIImage? {
         guard let name = engine.currentBook?.coverFileName else { return nil }
-        return CoverService.image(named: name, directory: LibraryStore.shared.coverDirectory)
+        // 240pt 的封面，按 3x 取 720px 就够，不必读 1200px 原图
+        return CoverService.thumbnail(
+            named: name,
+            directory: LibraryStore.shared.coverDirectory,
+            maxPixel: 720
+        )
     }
 
     private var progressSection: some View {
         VStack(spacing: 4) {
             Slider(
                 value: Binding(
-                    get: { isScrubbing ? scrubValue : engine.currentTime },
+                    get: { isScrubbing ? scrubValue : clock.currentTime },
                     set: { newValue in
                         isScrubbing = true
                         scrubValue = newValue
                     }
                 ),
-                in: 0...max(engine.duration, 0.1),
+                in: 0...max(clock.duration, 0.1),
                 onEditingChanged: { editing in
                     if editing {
-                        scrubValue = engine.currentTime
+                        scrubValue = clock.currentTime
                     } else {
                         engine.seek(to: scrubValue)
                         isScrubbing = false
@@ -123,9 +129,9 @@ struct PlayerView: View {
             )
 
             HStack {
-                Text(Audiobook.timeString(isScrubbing ? scrubValue : engine.currentTime))
+                Text(Audiobook.timeString(isScrubbing ? scrubValue : clock.currentTime))
                 Spacer()
-                Text("-" + Audiobook.timeString(max(0, engine.duration - (isScrubbing ? scrubValue : engine.currentTime))))
+                Text("-" + Audiobook.timeString(max(0, clock.duration - (isScrubbing ? scrubValue : clock.currentTime))))
             }
             .font(.caption)
             .monospacedDigit()
