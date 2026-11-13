@@ -92,14 +92,23 @@ enum ImportService {
         let title = url.deletingPathExtension().lastPathComponent
         if store.books.contains(where: { $0.title == title }) { return nil }
 
-        let destination = store.audioDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(ext)
+        // 源文件已经在 Audio 目录里（爱思助手放进去的、或从「文件」App 里再选一次），
+        // 就不要再 copyItem 了 —— 同目录复制会多出一份 UUID 文件，占双倍空间。
+        let sourceDir = url.deletingLastPathComponent().standardizedFileURL
+        let audioDir = store.audioDirectory.standardizedFileURL
 
-        do {
-            try FileManager.default.copyItem(at: url, to: destination)
-        } catch {
-            throw ImportError.copyFailed(url.lastPathComponent, error)
+        let destination: URL
+        if sourceDir == audioDir {
+            destination = url
+        } else {
+            destination = audioDir
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(ext)
+            do {
+                try FileManager.default.copyItem(at: url, to: destination)
+            } catch {
+                throw ImportError.copyFailed(url.lastPathComponent, error)
+            }
         }
 
         let duration = await Self.duration(of: destination)
