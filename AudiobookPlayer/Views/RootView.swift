@@ -201,22 +201,27 @@ struct MiniPlayerBar: View {
     /// 底环和进度环用同一个 path、同一线宽，只是后者被 trim，所以两段首尾必然贴合
     /// 封面放在 TimelineView 外面，只有描边每秒重绘
     private func coverWithProgress(book: Audiobook) -> some View {
+        // 封面 34pt、圆角 6.8pt（BookCoverView 用 size * 0.2）。
+        // 进度环要「间距 0 + 圆角同心」：
+        //   环中心线半径 = 封面圆角 6.8 + 半个线宽 1.5 = 8.3
+        //   环内沿半径 = 8.3 - 1.5 = 6.8，正好压在封面圆角上
+        //   Shape 画在 37×37 的 rect 里（34 + 线宽），居中于 46×46 的框
         ZStack {
             BookCoverView(book: book, size: 34)
 
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 ZStack {
-                    RoundedRectRingShape(cornerRadius: 9)
+                    RoundedRectRingShape(cornerRadius: 8.3)
                         .stroke(Color.primary.opacity(0.13), lineWidth: 3)
 
-                    RoundedRectRingShape(cornerRadius: 9)
+                    RoundedRectRingShape(cornerRadius: 8.3)
                         .trim(from: 0, to: fraction)
                         .stroke(
                             Color.accentColor,
                             style: StrokeStyle(lineWidth: 3, lineCap: .butt, lineJoin: .round)
                         )
                 }
-                .padding(1.5)
+                .frame(width: 37, height: 37)
             }
         }
         .frame(width: 46, height: 46)
