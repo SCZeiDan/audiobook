@@ -10,6 +10,7 @@ struct PlayerView: View {
     @State private var scrubValue: Double = 0
     @State private var showSleepSheet = false
     @State private var showTuningSheet = false
+    @State private var showQueueSheet = false
 
     private let rates: [Double] = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
 
@@ -26,6 +27,12 @@ struct PlayerView: View {
                         .multilineTextAlignment(.center)
                         .lineLimit(2)
                         .padding(.horizontal, 8)
+
+                    if let name = engine.queueName {
+                        Text("来自「\(name)」")
+                            .font(.caption)
+                            .foregroundStyle(Color.accentColor)
+                    }
 
                     if let book = engine.currentBook, book.skipIntro > 0 || book.skipOutro > 0 {
                         Text("跳过片头 \(Int(book.skipIntro))s · 片尾 \(Int(book.skipOutro))s")
@@ -66,6 +73,11 @@ struct PlayerView: View {
                 BookTuningSheet()
                     .environmentObject(engine)
                     .presentationDetents([.medium])
+            }
+            .sheet(isPresented: $showQueueSheet) {
+                QueueSheet()
+                    .environmentObject(engine)
+                    .presentationDetents([.large])
             }
         }
     }
@@ -175,42 +187,56 @@ struct PlayerView: View {
     }
 
     private var extraRow: some View {
-        HStack(spacing: 10) {
-            Menu {
-                ForEach(rates, id: \.self) { value in
-                    Button {
-                        engine.setRate(Float(value))
-                    } label: {
-                        HStack {
-                            Text(String(format: "%.2fx", value))
-                            if abs(Double(engine.rate) - value) < 0.01 {
-                                Image(systemName: "checkmark")
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Button {
+                    showQueueSheet = true
+                } label: {
+                    chip(icon: "list.bullet", text: queueChipText)
+                }
+                .buttonStyle(.plain)
+
+                Menu {
+                    ForEach(rates, id: \.self) { value in
+                        Button {
+                            engine.setRate(Float(value))
+                        } label: {
+                            HStack {
+                                Text(String(format: "%.2fx", value))
+                                if abs(Double(engine.rate) - value) < 0.01 {
+                                    Image(systemName: "checkmark")
+                                }
                             }
                         }
                     }
+                } label: {
+                    chip(icon: "speedometer", text: String(format: "%.2fx", engine.rate))
                 }
-            } label: {
-                chip(icon: "speedometer", text: String(format: "%.2fx", engine.rate))
-            }
 
-            Button {
-                showSleepSheet = true
-            } label: {
-                chip(
-                    icon: "moon.zzz",
-                    text: sleepTimer.isActive ? sleepTimer.description : "定时播放"
-                )
-            }
-            .buttonStyle(.plain)
+                Button {
+                    showSleepSheet = true
+                } label: {
+                    chip(
+                        icon: "moon.zzz",
+                        text: sleepTimer.isActive ? sleepTimer.description : "定时播放"
+                    )
+                }
+                .buttonStyle(.plain)
 
-            Button {
-                showTuningSheet = true
-            } label: {
-                chip(icon: "scissors", text: "片头片尾")
+                Button {
+                    showTuningSheet = true
+                } label: {
+                    chip(icon: "scissors", text: "片头片尾")
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 2)
         }
         .font(.footnote)
+    }
+
+    private var queueChipText: String {
+        engine.queue.isEmpty ? "播放列表" : "播放列表 \(engine.queue.count)"
     }
 
     private func chip(icon: String, text: String) -> some View {

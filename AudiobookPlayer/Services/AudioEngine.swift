@@ -287,6 +287,18 @@ final class AudioEngine: NSObject, ObservableObject {
         return LibraryStore.shared.books
     }
 
+    /// 播放列表界面用：有队列走队列，没有队列就是书库全部（与自动连播顺序一致）
+    var queueBooks: [Audiobook] { orderedBooks }
+
+    /// 在播放列表里点某一集：沿用当前队列，从这一集开始播
+    func playFromQueue(_ book: Audiobook) {
+        if currentBook?.id == book.id {
+            if !isPlaying { resume() }
+            return
+        }
+        playTrack(book)
+    }
+
     func playNext() {
         let books = orderedBooks
         guard let current = currentBook,

@@ -25,8 +25,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yg.audiobook
         PRODUCT_NAME: AudiobookPlayer
-        MARKETING_VERSION: "0.4.0"
-        CURRENT_PROJECT_VERSION: "8"
+        MARKETING_VERSION: "0.4.1"
+        CURRENT_PROJECT_VERSION: "9"
         TARGETED_DEVICE_FAMILY: "1,2"
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: AudiobookPlayer/Info.plist
