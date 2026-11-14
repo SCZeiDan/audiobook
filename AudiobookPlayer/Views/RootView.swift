@@ -85,58 +85,50 @@ struct MiniPlayerBar: View {
 
     var body: some View {
         if let book = engine.currentBook {
-            VStack(spacing: 0) {
-                // 顶部一条 2pt 进度线，播客的迷你条没有，但一眼能看出听到哪了
-                TimelineView(.periodic(from: .now, by: 1)) { _ in
-                    progressLine
-                }
+            HStack(spacing: 11) {
+                coverWithProgress(book: book)
 
-                HStack(spacing: 11) {
-                    BookCoverView(book: book, size: 42)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(book.title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
 
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(book.title)
-                            .font(.subheadline.weight(.semibold))
+                    // 只让这一行文字每秒自己刷新，迷你条其余部分不动
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        Text(subtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
-
-                        // 只让这一行文字每秒自己刷新，迷你条其余部分不动
-                        TimelineView(.periodic(from: .now, by: 1)) { _ in
-                            Text(subtitle)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
                     }
-
-                    Spacer(minLength: 0)
-
-                    Button {
-                        engine.skip(by: 30)
-                    } label: {
-                        Image(systemName: "goforward.30")
-                            .font(.system(size: 20, weight: .medium))
-                            .frame(width: 34, height: 34)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("快进 30 秒")
-
-                    Button {
-                        engine.toggle()
-                    } label: {
-                        Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 23, weight: .medium))
-                            .frame(width: 38, height: 38)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(engine.isPlaying ? "暂停" : "播放")
                 }
-                .padding(.leading, 8)
-                .padding(.trailing, 6)
-                .padding(.bottom, 8)
-                .padding(.top, 7)
+
+                Spacer(minLength: 0)
+
+                Button {
+                    engine.skip(by: 30)
+                } label: {
+                    Image(systemName: "goforward.30")
+                        .font(.system(size: 20, weight: .medium))
+                        .frame(width: 34, height: 34)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("快进 30 秒")
+
+                Button {
+                    engine.toggle()
+                } label: {
+                    Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 23, weight: .medium))
+                        .frame(width: 38, height: 38)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(engine.isPlaying ? "暂停" : "播放")
             }
+            .padding(.leading, 8)
+            .padding(.trailing, 6)
+            .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(.regularMaterial)
@@ -153,19 +145,30 @@ struct MiniPlayerBar: View {
         }
     }
 
-    private var progressLine: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Rectangle()
-                    .fill(Color.primary.opacity(0.08))
-                Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(width: geo.size.width * fraction)
+    /// 左侧封面 + 外圈环形进度（替代原来顶部那条横线）
+    /// 封面放在 TimelineView 外面，只有圆环每秒重绘，避免封面图被反复解码
+    private func coverWithProgress(book: Audiobook) -> some View {
+        ZStack {
+            BookCoverView(book: book, size: 34)
+                .clipShape(Circle())
+
+            TimelineView(.periodic(from: .now, by: 1)) { _ in
+                ZStack {
+                    Circle()
+                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 2.5)
+
+                    Circle()
+                        .trim(from: 0, to: fraction)
+                        .stroke(
+                            Color.accentColor,
+                            style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
+                        )
+                        .rotationEffect(.degrees(-90))
+                }
             }
         }
-        .frame(height: 2)
-        .padding(.top, 2)
-        .padding(.horizontal, 2)
+        .frame(width: 46, height: 46)
+        .accessibilityLabel("已听 \(Int(fraction * 100))%")
     }
 
     private var fraction: Double {
