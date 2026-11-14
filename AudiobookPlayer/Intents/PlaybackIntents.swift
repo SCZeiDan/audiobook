@@ -1,50 +1,27 @@
 import AppIntents
 import Foundation
 
+// 说明：所有 intent 都设 openAppWhenRun = false，并且不返回 dialog。
+// 这样从「快捷指令」/ 小组件 / Siri 触发时只在后台把音频播起来，
+// 不会把雅拉马喜拉到前台，也不会弹运行结果通知。
+
 // MARK: - 播放 / 继续播放
 
+/// 不带任何参数：接着上次听到的位置继续播，连播顺序沿用上次的播放列表。
 struct PlayAudiobookIntent: AppIntent {
     static var title: LocalizedStringResource = "播放有声书"
-    static var description = IntentDescription("继续播放上次的位置，或按书名播放指定的一本。")
-    static var openAppWhenRun: Bool = true
+    static var description = IntentDescription("接着上次听到的位置继续播放，连播顺序沿用上次的列表。")
+    static var openAppWhenRun: Bool = false
 
-    @Parameter(title: "书名（可留空）")
-    var bookTitle: String?
-
-    static var parameterSummary: some ParameterSummary {
-        Summary("播放 \(\.$bookTitle)")
-    }
-
-    func perform() async throws -> some IntentResult & ProvidesDialog {
-        let message: String = await MainActor.run {
-            let store = LibraryStore.shared
+    func perform() async throws -> some IntentResult {
+        await MainActor.run {
             let engine = AudioEngine.shared
-
-            let keyword = (bookTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !keyword.isEmpty,
-               let book = store.books.first(where: {
-                   $0.title.localizedCaseInsensitiveContains(keyword)
-               }) {
-                engine.play(book)
-                return "开始播放《\(book.title)》"
+            if engine.currentBook == nil {
+                engine.restoreLastSession()
             }
-
-            if let current = engine.currentBook {
-                engine.resume()
-                return "继续播放《\(current.title)》"
-            }
-
-            let recent = store.books.max {
-                ($0.lastPlayedAt ?? .distantPast) < ($1.lastPlayedAt ?? .distantPast)
-            }
-            if let recent = recent {
-                engine.play(recent)
-                return "开始播放《\(recent.title)》"
-            }
-
-            return "书库是空的，先在 App 里导入音频文件。"
+            engine.resume()
         }
-        return .result(dialog: "\(message)")
+        return .result()
     }
 }
 
@@ -77,14 +54,12 @@ struct SkipPlaybackIntent: AppIntent {
         Summary("跳转 \(\.$seconds) 秒")
     }
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult {
         let delta = Double(seconds)
         await MainActor.run {
             AudioEngine.shared.skip(by: delta)
         }
-        let amount = Int(abs(delta))
-        let message = delta >= 0 ? "已快进 \(amount) 秒" : "已后退 \(amount) 秒"
-        return .result(dialog: "\(message)")
+        return .result()
     }
 }
 
@@ -93,7 +68,7 @@ struct SkipPlaybackIntent: AppIntent {
 struct SetSleepTimerIntent: AppIntent {
     static var title: LocalizedStringResource = "设置定时播放"
     static var description = IntentDescription("指定分钟数后自动淡出停止播放，适合睡前听书。")
-    static var openAppWhenRun: Bool = true
+    static var openAppWhenRun: Bool = false
 
     @Parameter(title: "分钟")
     var minutes: Int
@@ -102,12 +77,12 @@ struct SetSleepTimerIntent: AppIntent {
         Summary("\(\.$minutes) 分钟后停止播放")
     }
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult {
         let value = max(1, minutes)
         await MainActor.run {
             SleepTimer.shared.start(minutes: value)
         }
-        return .result(dialog: "\(value) 分钟后停止播放")
+        return .result()
     }
 }
 
@@ -118,11 +93,11 @@ struct CancelSleepTimerIntent: AppIntent {
     static var description = IntentDescription("取消当前的定时停止。")
     static var openAppWhenRun: Bool = false
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult {
         await MainActor.run {
             SleepTimer.shared.cancel()
         }
-        return .result(dialog: "定时播放已关闭")
+        return .result()
     }
 }
 
@@ -133,11 +108,11 @@ struct StopAtEndOfTrackIntent: AppIntent {
     static var description = IntentDescription("当前这一集播完后暂停，不跳到下一集。")
     static var openAppWhenRun: Bool = false
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult {
         await MainActor.run {
             SleepTimer.shared.startStopAtEndOfTrack()
         }
-        return .result(dialog: "本章结束后停止")
+        return .result()
     }
 }
 

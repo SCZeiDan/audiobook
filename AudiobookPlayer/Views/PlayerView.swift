@@ -187,65 +187,69 @@ struct PlayerView: View {
     }
 
     private var extraRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                Button {
-                    showQueueSheet = true
-                } label: {
-                    chip(icon: "list.bullet", text: queueChipText)
-                }
-                .buttonStyle(.plain)
+        HStack(spacing: 0) {
+            Button {
+                showQueueSheet = true
+            } label: {
+                accessoryLabel(icon: "list.bullet", text: queueChipText)
+            }
+            .buttonStyle(.plain)
 
-                Menu {
-                    ForEach(rates, id: \.self) { value in
-                        Button {
-                            engine.setRate(Float(value))
-                        } label: {
-                            HStack {
-                                Text(String(format: "%.2fx", value))
-                                if abs(Double(engine.rate) - value) < 0.01 {
-                                    Image(systemName: "checkmark")
-                                }
+            Menu {
+                ForEach(rates, id: \.self) { value in
+                    Button {
+                        engine.setRate(Float(value))
+                    } label: {
+                        HStack {
+                            Text(String(format: "%.2fx", value))
+                            if abs(Double(engine.rate) - value) < 0.01 {
+                                Image(systemName: "checkmark")
                             }
                         }
                     }
-                } label: {
-                    chip(icon: "speedometer", text: String(format: "%.2fx", engine.rate))
                 }
-
-                Button {
-                    showSleepSheet = true
-                } label: {
-                    chip(
-                        icon: "moon.zzz",
-                        text: sleepTimer.isActive ? sleepTimer.description : "定时播放"
-                    )
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    showTuningSheet = true
-                } label: {
-                    chip(icon: "scissors", text: "片头片尾")
-                }
-                .buttonStyle(.plain)
+            } label: {
+                accessoryLabel(icon: "speedometer", text: String(format: "%.2fx", engine.rate))
             }
-            .padding(.horizontal, 2)
+
+            Button {
+                showSleepSheet = true
+            } label: {
+                accessoryLabel(
+                    icon: "moon.zzz",
+                    text: sleepTimer.isActive ? "已定时" : "定时"
+                )
+            }
+            .buttonStyle(.plain)
+
+            Button {
+                showTuningSheet = true
+            } label: {
+                accessoryLabel(icon: "scissors", text: "片头尾")
+            }
+            .buttonStyle(.plain)
         }
-        .font(.footnote)
+        .padding(.top, 2)
     }
 
     private var queueChipText: String {
-        engine.queue.isEmpty ? "播放列表" : "播放列表 \(engine.queue.count)"
+        if engine.queue.isEmpty { return "播放列表" }
+        let count = engine.queueBooks.count
+        return count > 0 ? "列表 \(count)" : "播放列表"
     }
 
-    private func chip(icon: String, text: String) -> some View {
-        HStack(spacing: 5) {
+    /// 底部四个功能等分一行，图标在上、文字在下（不再横向滚动，避免超宽）
+    private func accessoryLabel(icon: String, text: String) -> some View {
+        VStack(spacing: 4) {
             Image(systemName: icon)
-            Text(text).lineLimit(1)
+                .font(.system(size: 17, weight: .regular))
+            Text(text)
+                .font(.caption2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
     }
 }

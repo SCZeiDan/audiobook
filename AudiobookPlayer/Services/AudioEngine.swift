@@ -38,6 +38,7 @@ final class AudioEngine: NSObject, ObservableObject {
         configureSession()
         registerRemoteCommands()
         observeInterruptions()
+        loadPersistedQueue()
     }
 
     // MARK: - 音频会话（后台 + 锁屏）
@@ -132,9 +133,9 @@ final class AudioEngine: NSObject, ObservableObject {
         activateSession()
 
         let start = position ?? AudioEngine.resumePosition(book: book, duration: player.duration)
-        if start > 0, start < player.duration {
-            player.currentTime = start
-        }
+        // position 可能是 0（「从头播放」）。旧写法 `if start > 0` 会把这个请求整个忽略，
+        // 表现就是播放页左上角的重播按钮点了没反应。
+        player.currentTime = min(max(0, start), max(0, player.duration - 0.2))
 
         currentBook = book
         clock.reset(time: player.currentTime, duration: player.duration)
@@ -148,9 +149,9 @@ final class AudioEngine: NSObject, ObservableObject {
         syncDurationIfNeeded(book: book, actual: player.duration)
     }
 
-    /// 导入后 / 想重头听：忽略历史进度，直接从片头之后开始
+    /// 导入后 / 想重头听：忽略历史进度，直接从片头之后开始（保留当前连播队列）
     func startFresh(_ book: Audiobook) {
-        play(book, from: max(0, book.skipIntro))
+        playTrack(book, from: max(0, book.skipIntro))
     }
 
     func pause() {
@@ -255,9 +256,39 @@ final class AudioEngine: NSObject, ObservableObject {
     // MARK: - 队列
 
     /// 当前连播队列（来自歌单）；为空时按书库顺序播放
-    @Published private(set) var queue: [UUID] = []
+    @Published private(set) var queue: [UUID] = [] {
+        didSet { persistQueue() }
+    }
     /// 正在连播的歌单名，用于界面提示
-    @Published private(set) var queueName: String?
+    @Published private(set) var queueName: String? {
+        didSet { persistQueue() }
+    }
+
+    private static let queueIDsKey = "engine.queueIDs"
+    private static let queueNameKey = "engine.queueName"
+
+    /// 队列要跨冷启动保留，否则「继续播放」会掉回书库顺序
+    private func persistQueue() {
+        let defaults = UserDefaults.standard
+        if queue.isEmpty {
+            defaults.removeObject(forKey: AudioEngine.queueIDsKey)
+        } else {
+            defaults.set(queue.map { $0.uuidString }, forKey: AudioEngine.queueIDsKey)
+        }
+        if let name = queueName {
+            defaults.set(name, forKey: AudioEngine.queueNameKey)
+        } else {
+            defaults.removeObject(forKey: AudioEngine.queueNameKey)
+        }
+    }
+
+    private func loadPersistedQueue() {
+        let defaults = UserDefaults.standard
+        if let raw = defaults.stringArray(forKey: AudioEngine.queueIDsKey), !raw.isEmpty {
+            queue = raw.compactMap { UUID(uuidString: $0) }
+        }
+        queueName = defaults.string(forKey: AudioEngine.queueNameKey)
+    }
 
     func clearQueue() {
         if !queue.isEmpty { queue = [] }
