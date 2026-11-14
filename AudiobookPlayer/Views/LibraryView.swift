@@ -32,11 +32,19 @@ struct LibraryView: View {
             summarySection
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("雅拉马喜")
+        .navigationTitle("资料库")
         .searchable(text: $keyword, prompt: "搜索书名")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 sortMenu
+            }
+            ToolbarItem(placement: .navigationBarTrailing) {
+                NavigationLink {
+                    SettingsView()
+                } label: {
+                    Image(systemName: "gearshape")
+                }
+                .accessibilityLabel("设置")
             }
         }
         .fileImporter(

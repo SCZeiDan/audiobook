@@ -174,7 +174,7 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         Section {
-            LabeledContent("版本", value: "0.3.4 (Beta)")
+            LabeledContent("版本", value: "0.4.0 (Beta)")
             LabeledContent("最低系统", value: "iOS 16.0")
             LabeledContent("开发者签名", value: "个人免费证书")
         } header: {
