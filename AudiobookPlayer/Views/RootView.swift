@@ -77,6 +77,58 @@ extension View {
     }
 }
 
+/// 圆角矩形描边路径，从顶边中点开始顺时针绕一圈。
+/// 用它配 `.trim(from: 0, to: progress)` 就能得到「沿着封面轮廓走」的进度。
+struct RoundedRectRingShape: Shape {
+    var cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let r = min(cornerRadius, min(rect.width, rect.height) / 2)
+        let minX = rect.minX, maxX = rect.maxX
+        let minY = rect.minY, maxY = rect.maxY
+        let midX = rect.midX
+
+        var p = Path()
+        p.move(to: CGPoint(x: midX, y: minY))
+
+        // 上边右段 → 右上圆角
+        p.addLine(to: CGPoint(x: maxX - r, y: minY))
+        p.addRelativeArc(
+            center: CGPoint(x: maxX - r, y: minY + r),
+            radius: r,
+            startAngle: .degrees(-90),
+            delta: .degrees(90)
+        )
+        // 右边
+        p.addLine(to: CGPoint(x: maxX, y: maxY - r))
+        p.addRelativeArc(
+            center: CGPoint(x: maxX - r, y: maxY - r),
+            radius: r,
+            startAngle: .degrees(0),
+            delta: .degrees(90)
+        )
+        // 下边
+        p.addLine(to: CGPoint(x: minX + r, y: maxY))
+        p.addRelativeArc(
+            center: CGPoint(x: minX + r, y: maxY - r),
+            radius: r,
+            startAngle: .degrees(90),
+            delta: .degrees(90)
+        )
+        // 左边
+        p.addLine(to: CGPoint(x: minX, y: minY + r))
+        p.addRelativeArc(
+            center: CGPoint(x: minX + r, y: minY + r),
+            radius: r,
+            startAngle: .degrees(180),
+            delta: .degrees(90)
+        )
+        // 回到起点，闭合
+        p.addLine(to: CGPoint(x: midX, y: minY))
+        return p
+    }
+}
+
 struct MiniPlayerBar: View {
     @EnvironmentObject private var engine: AudioEngine
     @EnvironmentObject private var sleepTimer: SleepTimer
@@ -145,26 +197,26 @@ struct MiniPlayerBar: View {
         }
     }
 
-    /// 左侧封面 + 外圈环形进度（替代原来顶部那条横线）
-    /// 封面放在 TimelineView 外面，只有圆环每秒重绘，避免封面图被反复解码
+    /// 左侧封面 + 外圈圆角方框进度
+    /// 底环和进度环用同一个 path、同一线宽，只是后者被 trim，所以两段首尾必然贴合
+    /// 封面放在 TimelineView 外面，只有描边每秒重绘
     private func coverWithProgress(book: Audiobook) -> some View {
         ZStack {
             BookCoverView(book: book, size: 34)
-                .clipShape(Circle())
 
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 ZStack {
-                    Circle()
-                        .strokeBorder(Color.primary.opacity(0.10), lineWidth: 2.5)
+                    RoundedRectRingShape(cornerRadius: 9)
+                        .stroke(Color.primary.opacity(0.13), lineWidth: 3)
 
-                    Circle()
+                    RoundedRectRingShape(cornerRadius: 9)
                         .trim(from: 0, to: fraction)
                         .stroke(
                             Color.accentColor,
-                            style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
+                            style: StrokeStyle(lineWidth: 3, lineCap: .butt, lineJoin: .round)
                         )
-                        .rotationEffect(.degrees(-90))
                 }
+                .padding(1.5)
             }
         }
         .frame(width: 46, height: 46)
