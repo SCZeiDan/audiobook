@@ -101,21 +101,13 @@ struct BookTuningSheet: View {
                     }
 
                     Section {
-                        Button("保存到当前这本") {
-                            save(book: book)
+                        Button("应用到当前歌单") {
+                            apply(book: book)
                         }
-                        if !engine.queue.isEmpty {
-                            Button("应用到本歌单「\(engine.queueName ?? "全部音频")」\(engine.queue.count) 集") {
-                                store.applySkipSettings(intro: intro, outro: outro, to: Set(engine.queue))
-                                engine.refreshCurrentBookFromStore()
-                                dismiss()
-                            }
-                        }
-                        Button("应用到全部 \(store.books.count) 本") {
-                            store.applySkipSettings(intro: intro, outro: outro)
-                            engine.refreshCurrentBookFromStore()
-                            dismiss()
-                        }
+                    } footer: {
+                        Text(engine.queue.isEmpty
+                             ? "当前没有歌单队列，只会改正在播的这一本。"
+                             : "把这个设置写进当前歌单里的每一集。")
                     }
                 } else {
                     Section {
@@ -142,11 +134,16 @@ struct BookTuningSheet: View {
         }
     }
 
-    private func save(book: Audiobook) {
-        var copy = book
-        copy.skipIntro = intro
-        copy.skipOutro = outro
-        store.update(copy)
+    /// 「应用到当前歌单」：有队列就作用于整张歌单，没有队列就只改当前这本
+    private func apply(book: Audiobook) {
+        if engine.queue.isEmpty {
+            var copy = book
+            copy.skipIntro = intro
+            copy.skipOutro = outro
+            store.update(copy)
+        } else {
+            store.applySkipSettings(intro: intro, outro: outro, to: Set(engine.queue))
+        }
         engine.refreshCurrentBookFromStore()
         dismiss()
     }

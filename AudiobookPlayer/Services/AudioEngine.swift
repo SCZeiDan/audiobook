@@ -31,6 +31,13 @@ final class AudioEngine: NSObject, ObservableObject {
     private var pendingPause: DispatchWorkItem?
     private var interruptionObserver: NSObjectProtocol?
 
+    // MARK: - 淡入淡出
+
+    /// 播放开始 / 暂停 / 换集时的音量渐变时长。
+    /// 50ms：刚好抹掉波形硬切的那声「咔哒」，又短到听不出「渐入」的拖沓。
+    /// 想更柔和就把这里调大（0.15 左右能明显感到渐入），想更干脆调到 0.02。
+    static let fadeDuration: Double = 0.05
+
     private override init() {
         clock = PlaybackClock()
         super.init()
@@ -113,14 +120,20 @@ final class AudioEngine: NSObject, ObservableObject {
 
         let isSameBook = currentBook?.id == book.id
         if !isSameBook || player == nil {
+            // 换集时先让旧的一集淡出 50ms 再停，否则波形硬切会「咔」一声
+            if let old = player, old.isPlaying {
+                old.setVolume(0, fadeDuration: AudioEngine.fadeDuration)
+                DispatchQueue.main.asyncAfter(deadline: .now() + AudioEngine.fadeDuration + 0.01) {
+                    old.stop()
+                }
+            }
             stopTicker()
-            player?.stop()
             player = nil
             do {
                 let fresh = try AVAudioPlayer(contentsOf: url)
                 fresh.delegate = self
                 fresh.enableRate = true
-                fresh.volume = 1
+                fresh.volume = 0          // 淡入起点
                 fresh.prepareToPlay()
                 player = fresh
             } catch {
@@ -140,8 +153,10 @@ final class AudioEngine: NSObject, ObservableObject {
         currentBook = book
         clock.reset(time: player.currentTime, duration: player.duration)
 
+        player.volume = 0
         player.play()
         player.rate = rate
+        player.setVolume(1, fadeDuration: AudioEngine.fadeDuration)   // 淡入
         isPlaying = true
 
         startTicker()
@@ -155,11 +170,33 @@ final class AudioEngine: NSObject, ObservableObject {
     }
 
     func pause() {
-        player?.pause()
+        guard let player = self.player else {
+            isPlaying = false
+            stopTicker()
+            persistProgress()
+            updateNowPlaying()
+            return
+        }
+
+        // 先淡出再停：50ms 内音量降到 0，真正的 pause 放在淡出之后，
+        // 这样既没有爆音，UI 也是立刻响应（isPlaying 马上置 false）。
+        // 淡出期间又按了播放的话，resume() 的 cancelPendingPause() 会撤掉这次暂停，
+        // 音量从当前位置平滑升回 1，不会闪一下。
+        if player.isPlaying {
+            player.setVolume(0, fadeDuration: AudioEngine.fadeDuration)
+        }
         isPlaying = false
         stopTicker()
         persistProgress()
         updateNowPlaying()
+
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                self?.player?.pause()
+            }
+        }
+        pendingPause = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + AudioEngine.fadeDuration + 0.01, execute: work)
     }
 
     func resume() {
@@ -175,9 +212,9 @@ final class AudioEngine: NSObject, ObservableObject {
             return
         }
         activateSession()
-        player.volume = 1
         player.play()
         player.rate = rate
+        player.setVolume(1, fadeDuration: AudioEngine.fadeDuration)   // 淡入
         isPlaying = true
         startTicker()
         updateNowPlaying()
@@ -239,9 +276,9 @@ final class AudioEngine: NSObject, ObservableObject {
 
         let work = DispatchWorkItem { [weak self] in
             Task { @MainActor in
-                guard let self = self else { return }
-                self.pause()
-                self.player?.volume = 1
+                // 音量已经是 0，pause() 内部再淡出一次也无害；不要把音量拨回 1，
+                // 否则下次 resume 又会从满音量起播，淡入就白做了
+                self?.pause()
             }
         }
         pendingPause = work

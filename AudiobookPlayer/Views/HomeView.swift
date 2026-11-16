@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 主页 —— 对齐 Apple 播客的「首页」：继续收听 + 最近添加 + 歌单
+/// 主页 —— 对齐 Apple 播客的「首页」：继续收听 + 歌单
 struct HomeView: View {
     @EnvironmentObject private var store: LibraryStore
     @EnvironmentObject private var engine: AudioEngine
@@ -16,8 +16,6 @@ struct HomeView: View {
 
                 if store.books.isEmpty {
                     emptyCard
-                } else {
-                    recentlyAddedSection
                 }
 
                 if !store.playlists.isEmpty {
@@ -40,10 +38,6 @@ struct HomeView: View {
         return store.books
             .filter { $0.lastPlayedAt != nil && !$0.isFinished }
             .max { ($0.lastPlayedAt ?? .distantPast) < ($1.lastPlayedAt ?? .distantPast) }
-    }
-
-    private var recentlyAdded: [Audiobook] {
-        Array(store.books.sorted { $0.addedAt > $1.addedAt }.prefix(12))
     }
 
     // MARK: - 继续收听
@@ -128,51 +122,6 @@ struct HomeView: View {
             return "已听 \(Int(progress * 100))% · 还剩 \(remaining) / 共 \(total)"
         }
         return "共 \(total)"
-    }
-
-    // MARK: - 最近添加
-
-    private var recentlyAddedSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("最近添加", detail: "\(store.books.count) 本")
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 14) {
-                    ForEach(recentlyAdded) { book in
-                        Button {
-                            engine.play(book)
-                            onOpenPlayer()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                BookCoverView(book: book, size: 128)
-                                    .overlay(alignment: .bottomLeading) {
-                                        if book.progress > 0.005 {
-                                            ProgressView(value: book.progress)
-                                                .tint(.white)
-                                                .padding(.horizontal, 6)
-                                                .padding(.bottom, 6)
-                                        }
-                                    }
-
-                                Text(book.title)
-                                    .font(.caption)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-                                    .foregroundStyle(.primary)
-
-                                Text(Audiobook.timeString(book.duration))
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(width: 128, alignment: .leading)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 16)
-            }
-            .padding(.horizontal, -16)
-        }
     }
 
     // MARK: - 歌单

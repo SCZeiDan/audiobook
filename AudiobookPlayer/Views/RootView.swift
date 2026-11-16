@@ -157,17 +157,6 @@ struct MiniPlayerBar: View {
                 Spacer(minLength: 0)
 
                 Button {
-                    engine.skip(by: 30)
-                } label: {
-                    Image(systemName: "goforward.30")
-                        .font(.system(size: 20, weight: .medium))
-                        .frame(width: 34, height: 34)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("快进 30 秒")
-
-                Button {
                     engine.toggle()
                 } label: {
                     Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
