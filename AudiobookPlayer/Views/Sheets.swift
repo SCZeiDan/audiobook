@@ -167,16 +167,12 @@ struct PlaylistTuningSheet: View {
     @State private var intro: Double = 0
     @State private var outro: Double = 0
     @State private var didLoad = false
+    /// 各集设置不一致时才提示；只在 onAppear 算一次，避免每次拖 Stepper 都遍历整张歌单
+    @State private var isMixed = false
 
-    private var members: [Audiobook] {
-        store.books(in: playlist)
-    }
-
-    /// 歌单里各集的设置不一致时，提示一句「当前混着不同值」
-    private var isMixed: Bool {
-        guard let first = members.first else { return false }
-        return members.contains { $0.skipIntro != first.skipIntro || $0.skipOutro != first.skipOutro }
-    }
+    /// 直接取 id，不解析成 Audiobook（歌单可能有上千集，body 里别做重活）
+    private var memberIDs: [UUID] { playlist.bookIDs }
+    private var memberCount: Int { memberIDs.count }
 
     var body: some View {
         NavigationStack {
@@ -189,7 +185,7 @@ struct PlaylistTuningSheet: View {
                         LabeledContent("跳过片尾", value: "\(Int(outro)) 秒")
                     }
                 } header: {
-                    Text("「\(playlist.name)」· \(members.count) 集")
+                    Text("「\(playlist.name)」· \(memberCount) 集")
                 } footer: {
                     if isMixed {
                         Text("这个歌单里各集的设置目前不一致，上面显示的是第一集的值。设置一次就会统一。")
@@ -199,16 +195,16 @@ struct PlaylistTuningSheet: View {
                 }
 
                 Section {
-                    Button("应用到这 \(members.count) 集") {
-                        store.applySkipSettings(intro: intro, outro: outro, to: Set(members.map { $0.id }))
+                    Button("应用到这 \(memberCount) 集") {
+                        store.applySkipSettings(intro: intro, outro: outro, to: Set(memberIDs))
                         engine.refreshCurrentBookFromStore()
                         dismiss()
                     }
-                    .disabled(members.isEmpty)
+                    .disabled(memberCount == 0)
 
-                    if !members.isEmpty {
+                    if memberCount > 0 {
                         Button("清空（片头片尾都设为 0）", role: .destructive) {
-                            store.applySkipSettings(intro: 0, outro: 0, to: Set(members.map { $0.id }))
+                            store.applySkipSettings(intro: 0, outro: 0, to: Set(memberIDs))
                             engine.refreshCurrentBookFromStore()
                             dismiss()
                         }
@@ -220,9 +216,12 @@ struct PlaylistTuningSheet: View {
             .onAppear {
                 guard !didLoad else { return }
                 didLoad = true
-                if let first = members.first {
-                    intro = first.skipIntro
-                    outro = first.skipOutro
+                let list = store.books(in: playlist)
+                guard let first = list.first else { return }
+                intro = first.skipIntro
+                outro = first.skipOutro
+                isMixed = list.contains {
+                    $0.skipIntro != first.skipIntro || $0.skipOutro != first.skipOutro
                 }
             }
             .toolbar {
