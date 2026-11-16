@@ -72,6 +72,7 @@ struct PlayerView: View {
             .sheet(isPresented: $showTuningSheet) {
                 BookTuningSheet()
                     .environmentObject(engine)
+                    .environmentObject(LibraryStore.shared)
                     .presentationDetents([.medium])
             }
             .sheet(isPresented: $showQueueSheet) {

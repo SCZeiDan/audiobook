@@ -341,17 +341,20 @@ final class AudioEngine: NSObject, ObservableObject {
         playTrack(books[index + 1])
     }
 
+    /// 返回上一集。
+    /// 旧实现有个「播过 3 秒就先回本集开头」的分支，等于把按钮变成了第二颗回退键 ——
+    /// 一本 40 分钟的书永远播过 3 秒，所以这个按钮再也切不到上一集。
+    /// 回退有专门的 gobackward.15 按钮负责，这里只做一件事：切上一集。
     func playPrevious() {
         let books = orderedBooks
         guard let current = currentBook,
               let index = books.firstIndex(where: { $0.id == current.id }) else { return }
-        // 播过 3 秒以上，先回本集开头，符合常见播放器习惯
-        if let player = self.player, player.currentTime > 3.0 {
-            seek(to: current.skipIntro)
-            return
+        if index > 0 {
+            playTrack(books[index - 1])
+        } else {
+            // 已经是第一集：回本集开头（跳片头），别让按钮白点
+            seek(to: max(0, current.skipIntro))
         }
-        guard index > 0 else { return }
-        playTrack(books[index - 1])
     }
 
     // MARK: - 冷启动恢复
@@ -392,10 +395,17 @@ final class AudioEngine: NSObject, ObservableObject {
     // MARK: - 片头片尾 / 计时
 
     private static func resumePosition(book: Audiobook, duration: Double) -> Double {
-        var pos = max(book.lastPosition, max(0, book.skipIntro))
+        // 防御：片头设得比整本书还长（比如 600 秒片头配 5 分钟的短音频），
+        // 起点会被推到末尾、立刻触发片尾跳集，看着就像「一开播就跳」。片头最多吃一半。
+        let introCap = duration > 0 ? duration * 0.5 : Double.greatestFiniteMagnitude
+        let intro = min(max(0, book.skipIntro), introCap)
+        let outroCap = duration > 0 ? duration * 0.5 : 0
+        let outro = min(max(0, book.skipOutro), outroCap)
+
+        var pos = max(book.lastPosition, intro)
         // 上次停在尾部（≈已被片尾逻辑吃掉），从片头重新开始
-        if duration > 0, pos >= duration - max(0, book.skipOutro) - 0.5 {
-            pos = max(0, book.skipIntro)
+        if duration > 0, pos >= duration - outro - 0.5 {
+            pos = intro
         }
         return pos
     }
@@ -421,9 +431,12 @@ final class AudioEngine: NSObject, ObservableObject {
         // 只喂给时钟对象，不碰 engine 自己的 @Published，列表不会跟着重算
         clock.ticking(time: player.currentTime, duration: player.duration)
 
-        // 片尾跳过：剩余时长 <= skipOutro 时直接结算
-        let outro = max(0, book.skipOutro)
-        if outro > 0, player.duration - player.currentTime <= outro {
+        // 片尾跳过：剩余时长 <= skipOutro 时直接结算。
+        // 同样要防误设：片尾值不超过总时长的一半，且至少播过半秒，
+        // 否则一本 5 分钟的短音频配上 600 秒片尾会「一开播就跳下一集」。
+        let outroCap = player.duration > 0 ? player.duration * 0.5 : 0
+        let outro = min(max(0, book.skipOutro), outroCap)
+        if outro > 0, player.currentTime > 0.5, player.duration - player.currentTime <= outro {
             handleFinish(autoAdvance: true)
             return
         }

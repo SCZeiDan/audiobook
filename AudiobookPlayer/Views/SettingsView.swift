@@ -106,6 +106,7 @@ struct SettingsView: View {
             }
             Button {
                 store.applySkipSettings(intro: intro, outro: outro)
+                engine.refreshCurrentBookFromStore()
             } label: {
                 Text("应用到全部 \(store.books.count) 本")
             }
@@ -113,7 +114,7 @@ struct SettingsView: View {
         } header: {
             Text("跳过头尾")
         } footer: {
-            Text("这里改的是全书库的默认值；单本可以长按播放页的「片头片尾」单独调。片尾的意思是：当剩余时间小于这个值时就当作本章听完。")
+            Text("这里改的是整个书库。想只对某个歌单生效：资料库里长按歌单 →「片头片尾…」，整张歌单一次设好。单本可以在播放页的「片头尾」里调。")
         }
     }
 
@@ -174,7 +175,7 @@ struct SettingsView: View {
 
     private var aboutSection: some View {
         Section {
-            LabeledContent("版本", value: "0.4.5 (Beta)")
+            LabeledContent("版本", value: "0.4.6 (Beta)")
             LabeledContent("最低系统", value: "iOS 16.0")
             LabeledContent("开发者签名", value: "个人免费证书")
         } header: {

@@ -19,6 +19,8 @@ struct LibraryView: View {
     @State private var renameTarget: Playlist?
     /// 正在确认删除的歌单
     @State private var deleteTarget: Playlist?
+    /// 正在批量设置片头片尾的歌单
+    @State private var tuningTarget: Playlist?
 
     private var visibleBooks: [Audiobook] {
         store.visibleBooks(keyword: keyword)
@@ -89,6 +91,11 @@ struct LibraryView: View {
             PlaylistNameSheet(title: "重命名歌单", initial: list.name) { name in
                 store.renamePlaylist(list.id, to: name)
             }
+        }
+        .sheet(item: $tuningTarget) { list in
+            PlaylistTuningSheet(playlist: list)
+                .environmentObject(store)
+                .environmentObject(engine)
         }
         .confirmationDialog(
             deleteTitle,
@@ -182,6 +189,11 @@ struct LibraryView: View {
                         Label("播放整个歌单", systemImage: "play.fill")
                     }
                     Button {
+                        tuningTarget = list
+                    } label: {
+                        Label("片头片尾…", systemImage: "scissors")
+                    }
+                    Button {
                         renameTarget = list
                     } label: {
                         Label("重命名", systemImage: "pencil")
@@ -196,7 +208,7 @@ struct LibraryView: View {
         } header: {
             Text("歌单")
         } footer: {
-            Text("点歌单从第一集没听完的开始连播；左滑删除，可以只解散歌单，也可以连音频一起删。")
+            Text("点歌单从第一集没听完的开始连播；左滑删除，可以只解散歌单，也可以连音频一起删。长按歌单可以给整个歌单批量设片头片尾。")
         }
     }
 

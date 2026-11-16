@@ -101,8 +101,15 @@ struct BookTuningSheet: View {
                     }
 
                     Section {
-                        Button("保存到当前书") {
+                        Button("保存到当前这本") {
                             save(book: book)
+                        }
+                        if !engine.queue.isEmpty {
+                            Button("应用到本歌单「\(engine.queueName ?? "全部音频")」\(engine.queue.count) 集") {
+                                store.applySkipSettings(intro: intro, outro: outro, to: Set(engine.queue))
+                                engine.refreshCurrentBookFromStore()
+                                dismiss()
+                            }
                         }
                         Button("应用到全部 \(store.books.count) 本") {
                             store.applySkipSettings(intro: intro, outro: outro)
@@ -142,6 +149,88 @@ struct BookTuningSheet: View {
         store.update(copy)
         engine.refreshCurrentBookFromStore()
         dismiss()
+    }
+}
+
+// MARK: - 歌单批量片头片尾
+
+/// 对一个歌单整体设置跳过头尾。
+/// 片头片尾是存在每本书上的字段，所以「作用于歌单」= 把同一组值写进这个歌单里的每一本，
+/// 已经听过一半的书不会因此丢失进度（只动 skipIntro / skipOutro）。
+struct PlaylistTuningSheet: View {
+    let playlist: Playlist
+
+    @EnvironmentObject private var engine: AudioEngine
+    @EnvironmentObject private var store: LibraryStore
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var intro: Double = 0
+    @State private var outro: Double = 0
+    @State private var didLoad = false
+
+    private var members: [Audiobook] {
+        store.books(in: playlist)
+    }
+
+    /// 歌单里各集的设置不一致时，提示一句「当前混着不同值」
+    private var isMixed: Bool {
+        guard let first = members.first else { return false }
+        return members.contains { $0.skipIntro != first.skipIntro || $0.skipOutro != first.skipOutro }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Stepper(value: $intro, in: 0...600, step: 5) {
+                        LabeledContent("跳过片头", value: "\(Int(intro)) 秒")
+                    }
+                    Stepper(value: $outro, in: 0...600, step: 5) {
+                        LabeledContent("跳过片尾", value: "\(Int(outro)) 秒")
+                    }
+                } header: {
+                    Text("「\(playlist.name)」· \(members.count) 集")
+                } footer: {
+                    if isMixed {
+                        Text("这个歌单里各集的设置目前不一致，上面显示的是第一集的值。设置一次就会统一。")
+                    } else {
+                        Text("片头：每次从开头播放时自动跳过。片尾：剩余时间小于该值时直接进下一集。只改跳过头尾，不动收听进度。")
+                    }
+                }
+
+                Section {
+                    Button("应用到这 \(members.count) 集") {
+                        store.applySkipSettings(intro: intro, outro: outro, to: Set(members.map { $0.id }))
+                        engine.refreshCurrentBookFromStore()
+                        dismiss()
+                    }
+                    .disabled(members.isEmpty)
+
+                    if !members.isEmpty {
+                        Button("清空（片头片尾都设为 0）", role: .destructive) {
+                            store.applySkipSettings(intro: 0, outro: 0, to: Set(members.map { $0.id }))
+                            engine.refreshCurrentBookFromStore()
+                            dismiss()
+                        }
+                    }
+                }
+            }
+            .navigationTitle("片头片尾")
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                guard !didLoad else { return }
+                didLoad = true
+                if let first = members.first {
+                    intro = first.skipIntro
+                    outro = first.skipOutro
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("取消") { dismiss() }
+                }
+            }
+        }
     }
 }
 
