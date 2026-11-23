@@ -31,6 +31,8 @@ use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
 const DEFAULT_ANISETTE_URL: &str = "https://mac-ani.jkcoxson.com";
+/// 2FA 验证码 handoff 文件：外部把 6 位码写进去，进程读到就提交。
+const TFA_HANDOFF: &str = r"C:\yalasign-work\2fa.txt";
 // client_info / user_agent 一律向 anisette 服务端要（{url}/v3/client_info）。
 // 2026-11 苹果 GSA 收紧校验：X-Mme-Client-Info 必须与 anisette 身份一致，
 // 硬编码成另一台机器（如 Mac15,7 / macOS 27.0）会直接换回 503。
@@ -135,14 +137,37 @@ fn two_factor_callback() -> TfaBox {
             } else {
                 eprintln!("[2FA] 验证码已推送到你的受信任设备。");
             }
-            eprint!("[2FA] 请输入 6 位验证码: ");
-            let _ = std::io::stderr().flush();
-            let mut code = String::new();
-            if std::io::stdin().read_line(&mut code).is_err() {
-                code.clear();
+
+            // 优先读环境变量，其次轮询 handoff 文件。
+            // 绝不返回空码——苹果对错误/空码计数，累计后返回
+            // -22982 Too many verification attempts，账号会被锁一段时间。
+            if let Ok(v) = std::env::var("YALASIGN_2FA") {
+                let v = v.trim().to_string();
+                if v.len() >= 6 {
+                    eprintln!("[2FA] 使用 YALASIGN_2FA 环境变量里的验证码");
+                    return Ok(TwoFactorCallbackResponse::SubmitCode(v));
+                }
             }
-            Ok(TwoFactorCallbackResponse::SubmitCode(
-                code.trim().to_string(),
+
+            let path = std::path::PathBuf::from(TFA_HANDOFF);
+            eprintln!(
+                "[2FA] 等待验证码文件：{}（写入 6 位码后本进程会自动读取并提交）",
+                path.display()
+            );
+            for _ in 0..240 {
+                if let Ok(s) = std::fs::read_to_string(&path) {
+                    let s = s.trim().to_string();
+                    if s.len() >= 6 {
+                        let _ = std::fs::remove_file(&path);
+                        eprintln!("[2FA] 已读取验证码，提交中");
+                        return Ok(TwoFactorCallbackResponse::SubmitCode(s));
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+            Err(rootcause::report!(
+                "等待 2FA 验证码超时（20 分钟）：既没有 YALASIGN_2FA，也没等到 {}",
+                path.display()
             ))
         }
         .boxed()
