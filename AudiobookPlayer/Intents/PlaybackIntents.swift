@@ -16,6 +16,8 @@ struct PlayAudiobookIntent: AppIntent {
     func perform() async throws -> some IntentResult {
         await MainActor.run {
             let engine = AudioEngine.shared
+            // 后台被拉起时先把音频会话配好，否则第一次 play() 可能直接被拒
+            engine.prepareForBackgroundStart()
             if engine.currentBook == nil {
                 engine.restoreLastSession()
             }
@@ -80,6 +82,18 @@ struct SetSleepTimerIntent: AppIntent {
     func perform() async throws -> some IntentResult {
         let value = max(1, minutes)
         await MainActor.run {
+            let engine = AudioEngine.shared
+            engine.prepareForBackgroundStart()
+
+            // 「定时播放」语义上是边播边计时。这里如果本来就停着，
+            // 顺手把它播起来 —— 否则只挂了个倒计时、一点声音都没有，
+            // 看着就像定时器在空转。
+            if !engine.isPlaying {
+                if engine.currentBook == nil {
+                    engine.restoreLastSession()
+                }
+                engine.resume()
+            }
             SleepTimer.shared.start(minutes: value)
         }
         return .result()

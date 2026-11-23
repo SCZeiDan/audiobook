@@ -12,6 +12,10 @@ final class SleepTimer: ObservableObject {
     @Published private(set) var stopAtEndOfTrack: Bool = false
 
     private var timer: Timer?
+    /// 用绝对时间戳记截止点，而不是每秒减一。
+    /// App 在后台被挂起时 Timer 会停，减一的写法会把这段时间「吞掉」，
+    /// 回到前台后剩余时间就偏了。按 deadline 重算是不会漂的。
+    private var deadline: Date?
 
     private init() {}
 
@@ -27,6 +31,7 @@ final class SleepTimer: ObservableObject {
         cancel()
         guard seconds > 0 else { return }
         stopAtEndOfTrack = false
+        deadline = Date().addingTimeInterval(seconds)
         remaining = seconds
 
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
@@ -46,20 +51,22 @@ final class SleepTimer: ObservableObject {
     func cancel() {
         timer?.invalidate()
         timer = nil
+        deadline = nil
         remaining = nil
         stopAtEndOfTrack = false
     }
 
     private func tick() {
-        guard let current = remaining else { return }
-        let next = current - 1
-        if next <= 0 {
+        guard let deadline = deadline else { return }
+        let left = deadline.timeIntervalSinceNow
+        if left <= 0 {
             timer?.invalidate()
             timer = nil
+            self.deadline = nil
             remaining = nil
             fadeOutAndPause()
         } else {
-            remaining = next
+            remaining = left
         }
     }
 

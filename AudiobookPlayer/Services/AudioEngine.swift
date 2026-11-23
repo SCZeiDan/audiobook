@@ -30,6 +30,8 @@ final class AudioEngine: NSObject, ObservableObject {
     private var isHandlingFinish = false
     private var pendingPause: DispatchWorkItem?
     private var interruptionObserver: NSObjectProtocol?
+    /// 连续多少次 tick 发现「显示在播但播放器停了」
+    private var stallCount = 0
 
     // MARK: - 淡入淡出
 
@@ -65,6 +67,65 @@ final class AudioEngine: NSObject, ObservableObject {
             try AVAudioSession.sharedInstance().setActive(true)
         } catch {
             print("[AudioEngine] session activate error: \(error)")
+        }
+    }
+
+    /// 后台被 AppIntent / Siri 唤醒时的前置动作。
+    /// 冷启动路径上 `init` 里那次 setCategory 可能在没有 UI 场景时失败，
+    /// 所以这里重新设一次类别再激活，返回是否真的激活成功。
+    @discardableResult
+    func prepareForBackgroundStart() -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .spokenAudio, options: [])
+        } catch {
+            print("[AudioEngine] session category error: \(error)")
+        }
+        do {
+            try session.setActive(true)
+            return true
+        } catch {
+            print("[AudioEngine] session activate error: \(error)")
+            return false
+        }
+    }
+
+    /// 真正让播放器出声。
+    ///
+    /// 必须看 `play()` 的返回值：后台（快捷指令 / Siri）拉起时它有可能返回 false。
+    /// 旧写法忽略返回值、直接把 isPlaying 置 true，于是界面显示在播放、
+    /// 实际进度条不动也没有声音 —— 就是那个「定时在跑但没声」的现象。
+    /// 这里失败会重新激活会话、重新 prepare 再试一次；仍失败就把状态退回，
+    /// 让界面和真实情况一致，而不是假装在播。
+    @discardableResult
+    private func startPlayback(_ player: AVAudioPlayer) -> Bool {
+        player.volume = 0
+        if player.play() {
+            fadeIn(player)
+            return true
+        }
+
+        _ = prepareForBackgroundStart()
+        player.prepareToPlay()
+        if player.play() {
+            fadeIn(player)
+            return true
+        }
+
+        isPlaying = false
+        lastError = "音频没能开始播放（后台启动时偶发）。打开雅拉马喜点一下播放键即可。"
+        return false
+    }
+
+    /// 50ms 淡入。极短的 fade 在刚 play 的那一下偶尔不推进，
+    /// 0.15 秒后再兜一次，避免音量停在 0 上「假装在播」。
+    private func fadeIn(_ player: AVAudioPlayer) {
+        player.setVolume(1, fadeDuration: AudioEngine.fadeDuration)
+        DispatchQueue.main.asyncAfter(deadline: .now() + AudioEngine.fadeDuration + 0.1) { [weak player] in
+            guard let player = player, player.isPlaying else { return }
+            if player.volume < 0.99 {
+                player.volume = 1
+            }
         }
     }
 
@@ -154,9 +215,9 @@ final class AudioEngine: NSObject, ObservableObject {
         clock.reset(time: player.currentTime, duration: player.duration)
 
         player.volume = 0
-        player.play()
+        player.enableRate = true
         player.rate = rate
-        player.setVolume(1, fadeDuration: AudioEngine.fadeDuration)   // 淡入
+        guard startPlayback(player) else { return }
         isPlaying = true
 
         startTicker()
@@ -202,19 +263,23 @@ final class AudioEngine: NSObject, ObservableObject {
     func resume() {
         cancelPendingPause()
         guard let book = currentBook else {
+            // 冷启动时用 playTrack 而不是 play()：play() 会 clearQueue()，
+            // 把快捷指令唤起时刚恢复的播放列表清掉
             if let first = LibraryStore.shared.books.first {
-                play(first)
+                playTrack(first)
+            } else {
+                lastError = "书库还没加载出来，稍等一下再点播放。"
             }
             return
         }
         guard let player = self.player else {
-            play(book, from: book.lastPosition)
+            playTrack(book, from: book.lastPosition)
             return
         }
-        activateSession()
-        player.play()
+        _ = prepareForBackgroundStart()
+        player.enableRate = true
         player.rate = rate
-        player.setVolume(1, fadeDuration: AudioEngine.fadeDuration)   // 淡入
+        guard startPlayback(player) else { return }
         isPlaying = true
         startTicker()
         updateNowPlaying()
@@ -465,6 +530,30 @@ final class AudioEngine: NSObject, ObservableObject {
 
     private func tick() {
         guard let player = self.player, let book = currentBook else { return }
+
+        // 自愈：界面显示在播，但播放器其实没走（后台被快捷指令拉起时见过）。
+        // 连续 3 次（0.75 秒）都这样，就重新激活会话再拉一次；
+        // 还是不行就把状态退回 false，避免出现「显示在播、进度不动、没有声音」的假播放。
+        if isPlaying && !player.isPlaying {
+            stallCount += 1
+            if stallCount >= 3 {
+                stallCount = 0
+                _ = prepareForBackgroundStart()
+                player.enableRate = true
+                player.rate = rate
+                if player.play() {
+                    fadeIn(player)
+                } else {
+                    isPlaying = false
+                    stopTicker()
+                    lastError = "播放中断了，回到 App 点一下播放键继续。"
+                    return
+                }
+            }
+        } else {
+            stallCount = 0
+        }
+
         // 只喂给时钟对象，不碰 engine 自己的 @Published，列表不会跟着重算
         clock.ticking(time: player.currentTime, duration: player.duration)
 
