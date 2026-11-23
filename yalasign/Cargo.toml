@@ -1,0 +1,28 @@
+[package]
+name = "yalasign"
+version = "0.1.0"
+edition = "2021"
+description = "Re-sign and install an unsigned IPA onto a local iOS device, reusing iloader's stored credentials"
+license = "MIT"
+
+[[bin]]
+name = "yalasign"
+path = "src/main.rs"
+
+[dependencies]
+isideload = { git = "https://github.com/nab138/isideload", branch = "main" }
+idevice = { version = "0.1.61", default-features = false, features = ["usbmuxd", "ring", "afc", "installation_proxy", "remote_pairing"] }
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "std"] }
+keyring = { version = "3.6", features = ["windows-native", "apple-native", "sync-secret-service"] }
+futures = "0.3"
+serde_json = "1"
+rootcause = "0.12"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
