@@ -52,6 +52,8 @@ struct Args {
     anisette_url: String,
     dry_run: bool,
     list_devices: bool,
+    /// true = 用 CLIENT_INFO 常量的旧值（Mac15,7 / macOS 27）覆盖 anisette 服务端的 client_info。
+    legacy_client_info: bool,
 }
 
 impl Default for Args {
@@ -62,6 +64,7 @@ impl Default for Args {
             anisette_url: DEFAULT_ANISETTE_URL.to_string(),
             dry_run: false,
             list_devices: false,
+            legacy_client_info: false,
         }
     }
 }
@@ -76,6 +79,7 @@ yalasign --list-devices\n\n\
 --ipa <path>        要安装的 .ipa 文件\n  \
 --apple-id <mail>   Apple ID，默认从 iloader 的 data.json 读取\n  \
 --anisette <url>    anisette 服务端，默认 {DEFAULT_ANISETTE_URL}\n  \
+--legacy-client-info 用硬编码的 Mac15,7 / macOS 27 声明覆盖服务端 client_info\n  \
 --dry-run           只登录并检查证书/设备，不实际安装\n  \
 --list-devices      列出当前连接的设备\n"
     );
@@ -96,6 +100,7 @@ fn parse_args() -> Args {
                 }
                 a.anisette_url = u;
             }
+            "--legacy-client-info" => a.legacy_client_info = true,
             "--dry-run" => a.dry_run = true,
             "--list-devices" => a.list_devices = true,
             "-h" | "--help" => usage(),
@@ -250,12 +255,17 @@ async fn main() {
         }
     }
     .set_serial_number("0".to_string())
-    .set_storage(Box::new(KeyringStorage::new(KEYRING_SERVICE.to_string())))
-    .set_client_info_override(Some(AnisetteClientInfo {
-        client_info: CLIENT_INFO.to_string(),
-        user_agent: USER_AGENT.to_string(),
-    }))
-    .set_url(&args.anisette_url);
+    .set_storage(Box::new(KeyringStorage::new(KEYRING_SERVICE.to_string())));
+    // 默认跟随 anisette 服务端 /v3/client_info；--legacy-client-info 时用旧硬编码值。
+    let anisette = if args.legacy_client_info {
+        anisette.set_client_info_override(Some(AnisetteClientInfo {
+            client_info: CLIENT_INFO.to_string(),
+            user_agent: USER_AGENT.to_string(),
+        }))
+    } else {
+        anisette
+    };
+    let anisette = anisette.set_url(&args.anisette_url);
 
     println!("[1/4] 登录 Apple ID …");
     let mut account = match AppleAccount::builder(&email.to_lowercase())
