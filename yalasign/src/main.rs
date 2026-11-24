@@ -12,7 +12,7 @@
 use futures::FutureExt;
 use idevice::usbmuxd::{UsbmuxdAddr, UsbmuxdConnection};
 use isideload::{
-    anisette::remote_v3::{AnisetteClientInfo, RemoteV3AnisetteProvider},
+    anisette::{AnisetteClientInfo, remote_v3::RemoteV3AnisetteProvider},
     auth::apple_account::{AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse},
     dev::developer_session::DeveloperSession,
     sideload::{
