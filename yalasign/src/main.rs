@@ -12,7 +12,7 @@
 use futures::FutureExt;
 use idevice::usbmuxd::{UsbmuxdAddr, UsbmuxdConnection};
 use isideload::{
-    anisette::remote_v3::RemoteV3AnisetteProvider,
+    anisette::remote_v3::{AnisetteClientInfo, RemoteV3AnisetteProvider},
     auth::apple_account::{AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse},
     dev::developer_session::DeveloperSession,
     sideload::{
@@ -33,9 +33,16 @@ use tracing_subscriber::FmtSubscriber;
 const DEFAULT_ANISETTE_URL: &str = "https://mac-ani.jkcoxson.com";
 /// 2FA 验证码 handoff 文件：外部把 6 位码写进去，进程读到就提交。
 const TFA_HANDOFF: &str = r"C:\yalasign-work\2fa.txt";
-// client_info / user_agent 一律向 anisette 服务端要（{url}/v3/client_info）。
-// 2026-11 苹果 GSA 收紧校验：X-Mme-Client-Info 必须与 anisette 身份一致，
-// 硬编码成另一台机器（如 Mac15,7 / macOS 27.0）会直接换回 503。
+/// X-Mme-Client-Info / UA。
+///
+/// 实证（2026-11-14 ~ 11-16，同一台机器连续装 0.4.1…0.4.7 全部成功）：
+/// 使用下面这套「2026 年 Mac15,7 + macOS 27」的声明能通过 GSA。
+/// 反过来信任 anisette 服务端 `/v3/client_info` 返回的
+/// 「MacBookPro13,3 + Mac OS X 10.12.6」会稳定拿到 -22410
+/// —— 服务端的 MD 数据实际绑的是新机器，client_info 端点是老模板。
+const CLIENT_INFO: &str =
+    "<Mac15,7> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.akd/1.0)>";
+const USER_AGENT: &str = "akd/1.0 CFNetwork/811.5.4";
 const MACHINE_NAME: &str = "iloader";
 const KEYRING_SERVICE: &str = "iloader";
 
@@ -244,6 +251,10 @@ async fn main() {
     }
     .set_serial_number("0".to_string())
     .set_storage(Box::new(KeyringStorage::new(KEYRING_SERVICE.to_string())))
+    .set_client_info_override(Some(AnisetteClientInfo {
+        client_info: CLIENT_INFO.to_string(),
+        user_agent: USER_AGENT.to_string(),
+    }))
     .set_url(&args.anisette_url);
 
     println!("[1/4] 登录 Apple ID …");
